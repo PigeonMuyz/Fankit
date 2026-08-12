@@ -19,14 +19,25 @@ final class FanControlStore {
     private(set) var curveStatus = L10n.string("System control below activation temperature")
     private(set) var isCurveOverrideActive = false
     private(set) var curveEditorMessage: String?
+    private(set) var activeAICurveID: String?
+    private(set) var aiCaptureSession: AICaptureSession?
+    private(set) var latestAICaptureSession: AICaptureSession?
+    private(set) var aiCaptureError: String?
+    private(set) var isLoadingAIState = true
+    private(set) var aiPreviewProfile: ThermalCurveProfile?
+    private(set) var aiPreviewError: String?
+    var aiWorkflowRequestID = 0
     var selectedMode: FanControlMode = .system
 
     @ObservationIgnored private var monitor: HardwareMonitor?
     @ObservationIgnored private let fanControl = FanControlService()
+    @ObservationIgnored private let aiRecorder = AIObservationRecorder()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var isEvaluatingCurve = false
     @ObservationIgnored private var filteredControlTemperature: Double?
     @ObservationIgnored private var previousCurveTargets: [Int: Double] = [:]
+    @ObservationIgnored private var lastCaptureSampleAt: Date?
+    @ObservationIgnored private var isAppendingCaptureSample = false
     @ObservationIgnored private let defaults = UserDefaults.standard
     @ObservationIgnored private let startupMode: FanControlMode
     @ObservationIgnored private var didRestoreStartupMode = false
@@ -51,11 +62,16 @@ final class FanControlStore {
         }
         let profiles = ThermalCurveProfile.presets + customProfiles
         let savedID = UserDefaults.standard.string(forKey: "activeThermalCurveID")
+        let savedAICurveID = UserDefaults.standard.string(forKey: "activeAICurveID")
         curveProfiles = profiles
         activeCurveID = profiles.contains(where: { $0.id == savedID }) ? savedID! : ThermalCurveProfile.balanced.id
+        activeAICurveID = profiles.first(where: { $0.id == savedAICurveID && $0.isAIGenerated })?.id
     }
 
     var canControlFans: Bool { helperStatus == .ready }
+    var aiProfiles: [ThermalCurveProfile] { curveProfiles.filter(\.isAIGenerated) }
+    var hasAISchedule: Bool { activeAICurve != nil }
+    var isCurveMode: Bool { selectedMode == .autoBoost || selectedMode == .aiScheduling }
     var hottestTemperature: Double? { temperatures.map(\.celsius).max() }
     var hottestCPUTemperature: Double? {
         temperatures(in: .cpu).map(\.celsius).max()
@@ -65,7 +81,7 @@ final class FanControlStore {
     }
     var fastestFanRPM: Double? { fans.map(\.currentRPM).max() }
     var displayedCurveTemperature: Double? {
-        if selectedMode == .autoBoost, let curveControlTemperature {
+        if isCurveMode, let curveControlTemperature {
             return curveControlTemperature
         }
         return temperatures
@@ -79,6 +95,15 @@ final class FanControlStore {
     }
     var activeCurve: ThermalCurveProfile {
         curveProfiles.first(where: { $0.id == activeCurveID }) ?? .balanced
+    }
+
+    var activeAICurve: ThermalCurveProfile? {
+        guard let activeAICurveID else { return nil }
+        return curveProfiles.first(where: { $0.id == activeAICurveID && $0.isAIGenerated })
+    }
+
+    var activeScheduleCurve: ThermalCurveProfile {
+        selectedMode == .aiScheduling ? (activeAICurve ?? .balanced) : activeCurve
     }
 
     func start() {
@@ -99,6 +124,7 @@ final class FanControlStore {
                 }
             }
             Task { await refreshHelperStatus() }
+            Task { await restoreAIState() }
         } catch {
             errorMessage = L10n.error(error)
         }
@@ -115,14 +141,23 @@ final class FanControlStore {
             : nil
         isRefreshing = false
         NotificationCenter.default.post(name: .fanControlDidRefresh, object: self)
-        if selectedMode == .autoBoost {
+        if isCurveMode {
             Task { await evaluateCurveIfNeeded() }
         }
+        recordAICaptureSampleIfNeeded()
     }
 
     func selectMode(_ mode: FanControlMode) {
+        if mode == .aiScheduling && !hasAISchedule {
+            requestAIWorkflow()
+            return
+        }
         guard mode != selectedMode else { return }
         Task { _ = await applyMode(mode, persist: true) }
+    }
+
+    func requestAIWorkflow() {
+        aiWorkflowRequestID &+= 1
     }
 
     func refreshHelperStatus() async {
@@ -152,13 +187,171 @@ final class FanControlStore {
     }
 
     func selectCurve(_ id: String) {
-        guard curveProfiles.contains(where: { $0.id == id }) else { return }
+        guard curveProfiles.contains(where: { $0.id == id && !$0.isAIGenerated }) else { return }
         activeCurveID = id
         defaults.set(id, forKey: "activeThermalCurveID")
         filteredControlTemperature = nil
         previousCurveTargets = [:]
-        if selectedMode == .autoBoost {
+        if isCurveMode {
             Task { await evaluateCurveIfNeeded() }
+        }
+    }
+
+    func selectAICurve(_ id: String) {
+        guard curveProfiles.contains(where: { $0.id == id && $0.isAIGenerated }) else { return }
+        activeAICurveID = id
+        defaults.set(id, forKey: "activeAICurveID")
+        filteredControlTemperature = nil
+        previousCurveTargets = [:]
+        if selectedMode == .aiScheduling {
+            Task { await evaluateCurveIfNeeded() }
+        }
+    }
+
+    var aiCaptureSummary: AICaptureSummary? {
+        latestAICaptureSession.map(AIPromptBuilder.summary(for:))
+    }
+
+    var aiPrompt: String? {
+        latestAICaptureSession.map(AIPromptBuilder.prompt(for:))
+    }
+
+    func beginAICaptureIfNeeded() {
+        guard !isLoadingAIState,
+              aiCaptureSession == nil,
+              latestAICaptureSession == nil
+        else { return }
+        startAICapture()
+    }
+
+    func startAICapture() {
+        guard aiCaptureSession == nil else { return }
+        aiCaptureError = nil
+        Task { @MainActor in
+            if selectedMode != .system {
+                guard await applyMode(.system, persist: false) else {
+                    aiCaptureError = L10n.string("Fankit could not switch to System scheduling for recording.")
+                    return
+                }
+            }
+            do {
+                let session = try await aiRecorder.startSession()
+                aiCaptureSession = session
+                latestAICaptureSession = nil
+                lastCaptureSampleAt = nil
+            } catch {
+                aiCaptureError = error.localizedDescription
+            }
+        }
+    }
+
+    func finishAICapture() {
+        guard aiCaptureSession != nil else { return }
+        Task { @MainActor in
+            do {
+                let session = try await aiRecorder.finishSession()
+                aiCaptureSession = nil
+                latestAICaptureSession = session
+                lastCaptureSampleAt = nil
+            } catch {
+                aiCaptureError = error.localizedDescription
+            }
+        }
+    }
+
+    func discardLatestAICapture() {
+        latestAICaptureSession = nil
+        aiPreviewProfile = nil
+        aiPreviewError = nil
+        aiCaptureError = nil
+    }
+
+    func previewAIResponse(_ text: String) {
+        do {
+            aiPreviewProfile = try AIScheduleParser.parse(text)
+            aiPreviewError = nil
+        } catch {
+            aiPreviewProfile = nil
+            aiPreviewError = error.localizedDescription
+        }
+    }
+
+    func clearAIPreview() {
+        aiPreviewProfile = nil
+        aiPreviewError = nil
+    }
+
+    @discardableResult
+    func saveAIPreview() -> Bool {
+        guard var profile = aiPreviewProfile else { return false }
+        profile.id = "ai.\(UUID().uuidString)"
+        profile.isBuiltIn = false
+        curveProfiles.append(profile)
+        activeAICurveID = profile.id
+        persistCustomCurves()
+        aiPreviewProfile = nil
+        return true
+    }
+
+    func saveAndEnableAIPreview() {
+        guard saveAIPreview() else { return }
+        Task { _ = await applyMode(.aiScheduling, persist: true) }
+    }
+
+    func deleteActiveAICurve() {
+        guard let activeAICurveID,
+              let index = curveProfiles.firstIndex(where: { $0.id == activeAICurveID && $0.isAIGenerated })
+        else { return }
+        curveProfiles.remove(at: index)
+        self.activeAICurveID = aiProfiles.first?.id
+        defaults.set(self.activeAICurveID, forKey: "activeAICurveID")
+        if selectedMode == .aiScheduling {
+            Task { _ = await applyMode(.system, persist: true) }
+        }
+        persistCustomCurves()
+    }
+
+    private func restoreAIState() async {
+        defer { isLoadingAIState = false }
+        do {
+            let restored = try await aiRecorder.restore()
+            aiCaptureSession = restored.active
+            latestAICaptureSession = restored.latest
+            lastCaptureSampleAt = restored.active?.samples.last?.timestamp
+        } catch {
+            aiCaptureError = error.localizedDescription
+        }
+    }
+
+    private func recordAICaptureSampleIfNeeded() {
+        guard aiCaptureSession != nil,
+              !isAppendingCaptureSample,
+              !fans.isEmpty || !temperatures.isEmpty
+        else { return }
+        let now = Date()
+        if let lastCaptureSampleAt,
+           now.timeIntervalSince(lastCaptureSampleAt) < AIObservationRecorder.sampleInterval
+        {
+            return
+        }
+
+        let sample = AICaptureSample(timestamp: now, sensors: temperatures, fans: fans)
+        lastCaptureSampleAt = now
+        isAppendingCaptureSample = true
+        Task { @MainActor in
+            defer { isAppendingCaptureSample = false }
+            do {
+                let updatedSession = try await aiRecorder.append(sample)
+                if updatedSession.isRecording {
+                    aiCaptureSession = updatedSession
+                } else {
+                    aiCaptureSession = nil
+                    latestAICaptureSession = updatedSession
+                    lastCaptureSampleAt = nil
+                }
+            } catch {
+                aiCaptureError = error.localizedDescription
+            }
         }
     }
 
@@ -318,7 +511,7 @@ final class FanControlStore {
     }
 
     private func evaluateCurveIfNeeded() async {
-        guard selectedMode == .autoBoost, canControlFans, !isEvaluatingCurve else { return }
+        guard isCurveMode, canControlFans, !isEvaluatingCurve else { return }
         isEvaluatingCurve = true
         defer { isEvaluatingCurve = false }
 
@@ -350,7 +543,7 @@ final class FanControlStore {
                 return
             }
 
-            let activation = activeCurve.activationTemperature
+            let activation = activeScheduleCurve.activationTemperature
             if isCurveOverrideActive && temperature <= activation - 2 {
                 try await fanControl.apply(.system)
                 resetCurveRuntimeState(keepTemperature: true)
@@ -362,7 +555,7 @@ final class FanControlStore {
                 return
             }
 
-            guard let fraction = activeCurve.fanFraction(at: temperature) else {
+            guard let fraction = activeScheduleCurve.fanFraction(at: temperature) else {
                 curveStatus = L10n.format(
                     "System control · activates at %d°C",
                     Int(activation)
@@ -420,7 +613,11 @@ final class FanControlStore {
     @discardableResult
     private func applyMode(_ mode: FanControlMode, persist: Bool) async -> Bool {
         do {
-            if mode == .autoBoost {
+            if mode == .autoBoost || mode == .aiScheduling {
+                if mode == .aiScheduling, activeAICurve == nil {
+                    selectedMode = .system
+                    return false
+                }
                 try await fanControl.apply(.system)
                 selectedMode = mode
                 resetCurveRuntimeState()
@@ -450,6 +647,12 @@ final class FanControlStore {
     private func restoreStartupModeIfNeeded() async {
         guard !didRestoreStartupMode else { return }
         guard startupMode != .system else {
+            didRestoreStartupMode = true
+            return
+        }
+        if startupMode == .aiScheduling, activeAICurve == nil {
+            // A deleted or invalid AI profile must not cause every helper refresh
+            // to retry a mode that cannot be applied.
             didRestoreStartupMode = true
             return
         }
@@ -493,9 +696,10 @@ final class FanControlStore {
         guard let data = try? JSONEncoder().encode(customProfiles) else { return }
         defaults.set(data, forKey: "customThermalCurves")
         defaults.set(activeCurveID, forKey: "activeThermalCurveID")
+        defaults.set(activeAICurveID, forKey: "activeAICurveID")
         filteredControlTemperature = nil
         previousCurveTargets = [:]
-        if selectedMode == .autoBoost {
+        if isCurveMode {
             Task { await evaluateCurveIfNeeded() }
         }
     }

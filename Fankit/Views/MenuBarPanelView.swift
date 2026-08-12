@@ -7,6 +7,7 @@ struct MenuBarPanelView: View {
     let showSettings: () -> Void
     let quit: () -> Void
     var onPreferredSizeChange: (CGSize) -> Void = { _ in }
+    var openAIWorkflow: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -42,7 +43,7 @@ struct MenuBarPanelView: View {
 
             Divider()
 
-            MenuBarScheduleMenu(store: store)
+            MenuBarScheduleMenu(store: store, openAIWorkflow: openAIWorkflow)
 
             if store.canControlFans {
                 controlSummary
@@ -72,7 +73,12 @@ struct MenuBarPanelView: View {
     }
 
     private var preferredHeight: CGFloat {
-        selectedSchedule == .customScheduling ? 500 : 350
+        switch selectedSchedule {
+        case .customScheduling, .aiScheduling:
+            500
+        case .systemScheduling, .extremeCooling:
+            350
+        }
     }
 
     private var selectedSchedule: MenuBarSchedule {
@@ -98,7 +104,45 @@ struct MenuBarPanelView: View {
             .font(.callout)
             .foregroundStyle(.secondary)
         case .aiScheduling:
-            EmptyView()
+            if let profile = store.activeAICurve {
+                aiScheduleSummary(profile)
+            } else {
+                Label("Create an AI schedule from a System observation", systemImage: "sparkles")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func aiScheduleSummary(_ profile: ThermalCurveProfile) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Label("Current Preset", systemImage: "sparkles")
+                    .font(.callout.weight(.medium))
+                Spacer(minLength: 8)
+                Picker("Current Preset", selection: Binding(
+                    get: { store.activeAICurveID ?? profile.id },
+                    set: store.selectAICurve
+                )) {
+                    ForEach(store.aiProfiles) { aiProfile in
+                        Text(verbatim: aiProfile.localizedName)
+                            .tag(aiProfile.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+            }
+
+            Text(verbatim: store.curveStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            MenuBarReadOnlyCurveChart(
+                profile: profile,
+                currentTemperature: store.displayedCurveTemperature
+            )
+            .frame(height: 132)
         }
     }
 
@@ -112,7 +156,7 @@ struct MenuBarPanelView: View {
                     get: { store.activeCurveID },
                     set: store.selectCurve
                 )) {
-                    ForEach(store.curveProfiles) { profile in
+                    ForEach(store.curveProfiles.filter { !$0.isAIGenerated }) { profile in
                         Text(verbatim: profile.isBuiltIn ? profile.localizedName : "★ \(profile.name)")
                             .tag(profile.id)
                     }
@@ -164,6 +208,7 @@ struct MenuBarPanelView: View {
 
 private struct MenuBarScheduleMenu: View {
     let store: FanControlStore
+    let openAIWorkflow: () -> Void
 
     private var selectedSchedule: MenuBarSchedule {
         MenuBarSchedule(mode: store.selectedMode)
@@ -174,8 +219,11 @@ private struct MenuBarScheduleMenu: View {
             Section {
                 ForEach(MenuBarSchedule.allCases) { schedule in
                     Button {
-                        guard let mode = schedule.fanControlMode else { return }
-                        store.selectMode(mode)
+                        if schedule == .aiScheduling && !store.hasAISchedule {
+                            openAIWorkflow()
+                        } else if let mode = schedule.fanControlMode {
+                            store.selectMode(mode)
+                        }
                     } label: {
                         HStack {
                             Label {
@@ -189,7 +237,12 @@ private struct MenuBarScheduleMenu: View {
                             }
                         }
                     }
-                    .disabled(!store.canControlFans || !schedule.isAvailable)
+                    .disabled(
+                        !schedule.isAvailable
+                            || (schedule == .aiScheduling
+                                ? (store.hasAISchedule && !store.canControlFans)
+                                : !store.canControlFans)
+                    )
                 }
             } header: {
                 Text(verbatim: L10n.string("Scheduling"))
@@ -213,7 +266,6 @@ private struct MenuBarScheduleMenu: View {
         }
         .menuStyle(.borderlessButton)
         .buttonStyle(.plain)
-        .disabled(!store.canControlFans)
         .help(L10n.string("Choose a scheduling mode"))
     }
 }

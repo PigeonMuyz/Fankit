@@ -139,6 +139,9 @@ final class FanControlService {
         case .autoBoost:
             // The store evaluates the selected curve and sends bounded targets.
             break
+        case .aiScheduling:
+            // The store evaluates the validated AI curve and sends bounded targets.
+            break
         }
     }
 

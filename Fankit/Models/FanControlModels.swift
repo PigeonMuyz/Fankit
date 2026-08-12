@@ -4,6 +4,7 @@ enum FanControlMode: String, CaseIterable, Identifiable {
     case system
     case maximum
     case autoBoost
+    case aiScheduling
 
     var id: Self { self }
 
@@ -12,6 +13,7 @@ enum FanControlMode: String, CaseIterable, Identifiable {
         case .system: L10n.string("System")
         case .maximum: L10n.string("Max")
         case .autoBoost: L10n.string("Auto Boost")
+        case .aiScheduling: L10n.string("AI Scheduling")
         }
     }
 }
@@ -47,7 +49,7 @@ enum MenuBarSchedule: String, CaseIterable, Identifiable {
         case .systemScheduling: .system
         case .extremeCooling: .maximum
         case .customScheduling: .autoBoost
-        case .aiScheduling: nil
+        case .aiScheduling: .aiScheduling
         }
     }
 
@@ -58,6 +60,7 @@ enum MenuBarSchedule: String, CaseIterable, Identifiable {
         case .system: self = .systemScheduling
         case .maximum: self = .extremeCooling
         case .autoBoost: self = .customScheduling
+        case .aiScheduling: self = .aiScheduling
         }
     }
 }

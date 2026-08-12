@@ -17,6 +17,8 @@ general-purpose Rosetta support ends after macOS 27.
 - Quiet, Balanced, Cool, and Sustained Work presets
 - A dedicated Curve Editor with click-to-adjust chart controls
 - Multiple named custom presets with 2–8 points, persisted locally
+- AI Scheduling with up to 24 hours of local System observation, prompt export,
+  strict JSON import, preview, and safe curve activation
 
 ## Build and run
 
@@ -45,7 +47,7 @@ Create a local Release app and a drag-to-install DMG with:
 ./script/build_release_dmg.sh
 ```
 
-The output is written to `dist/Fankit-1.0.1.dmg` together with its SHA-256
+The output is written to `dist/Fankit-1.0.2.dmg` together with its SHA-256
 checksum. The script automatically selects the first local code-signing
 identity, or you can choose one explicitly with `SIGNING_IDENTITY=<identity>`.
 The app still needs one-time approval under **System Settings → General →

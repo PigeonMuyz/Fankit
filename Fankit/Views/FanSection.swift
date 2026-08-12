@@ -26,12 +26,12 @@ struct FanSection: View {
             ))
             .disabled(!store.canControlFans)
 
-            if store.selectedMode == .autoBoost {
+            if store.isCurveMode {
                 HStack {
                     Label {
-                        Text(verbatim: store.activeCurve.localizedName)
+                        Text(verbatim: store.activeScheduleCurve.localizedName)
                     } icon: {
-                        Image(systemName: "chart.xyaxis.line")
+                        Image(systemName: store.selectedMode == .aiScheduling ? "sparkles" : "chart.xyaxis.line")
                     }
                     Spacer()
                     Text(verbatim: store.curveStatus)

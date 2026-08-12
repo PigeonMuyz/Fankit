@@ -52,6 +52,20 @@ verify_curve() {
   "$curve_test_binary"
 }
 
+verify_ai_scheduling() {
+  local ai_test_binary
+  ai_test_binary="$(mktemp -d)/fan-control-ai-verify"
+  xcrun swiftc \
+    "$ROOT_DIR/Fankit/Models/FanControlModels.swift" \
+    "$ROOT_DIR/Fankit/Models/ThermalCurve.swift" \
+    "$ROOT_DIR/Fankit/Models/AISchedulingModels.swift" \
+    "$ROOT_DIR/Fankit/Services/AIPromptBuilder.swift" \
+    "$ROOT_DIR/Fankit/Services/AIScheduleParser.swift" \
+    "$ROOT_DIR/script/ai_verify/main.swift" \
+    -o "$ai_test_binary"
+  "$ai_test_binary"
+}
+
 case "$MODE" in
   run)
     open_app
@@ -69,6 +83,7 @@ case "$MODE" in
     ;;
   --verify|verify)
     verify_curve
+    verify_ai_scheduling
     test -x "$HELPER_BINARY"
     test -f "$DAEMON_PLIST"
     test "$(lipo -archs "$APP_BINARY")" = "arm64"

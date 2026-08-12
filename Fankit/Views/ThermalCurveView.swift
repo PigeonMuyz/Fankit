@@ -8,7 +8,20 @@ struct ThermalCurveView: View {
     @AppStorage("curveShowRecommendedQuietRange") private var showRecommendedQuietRange = true
 
     private var profileSelection: Binding<String> {
-        Binding(get: { store.activeCurveID }, set: store.selectCurve)
+        Binding(
+            get: {
+                store.selectedMode == .aiScheduling
+                    ? (store.activeAICurveID ?? "")
+                    : store.activeCurveID
+            },
+            set: {
+                if store.selectedMode == .aiScheduling {
+                    store.selectAICurve($0)
+                } else {
+                    store.selectCurve($0)
+                }
+            }
+        )
     }
 
     var body: some View {
@@ -17,7 +30,7 @@ struct ThermalCurveView: View {
                 Label("Temperature Curve", systemImage: "chart.xyaxis.line")
                     .font(.title3.bold())
                 Spacer()
-                if store.selectedMode == .autoBoost {
+                if store.isCurveMode {
                     Label(
                         store.isCurveOverrideActive ? "Controlling" : "System",
                         systemImage: store.isCurveOverrideActive ? "fan.fill" : "checkmark.circle"
@@ -28,17 +41,17 @@ struct ThermalCurveView: View {
             }
 
             Picker("Preset", selection: profileSelection) {
-                ForEach(store.curveProfiles) { profile in
+                ForEach(store.selectedMode == .aiScheduling ? store.aiProfiles : store.curveProfiles.filter { !$0.isAIGenerated }) { profile in
                     Text(profile.isBuiltIn ? profile.localizedName : "★ \(profile.name)").tag(profile.id)
                 }
             }
 
-            Text(verbatim: store.activeCurve.localizedSummary)
+            Text(verbatim: store.activeScheduleCurve.localizedSummary)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             CurveChart(
-                profile: store.activeCurve,
+                profile: store.activeScheduleCurve,
                 currentTemperature: store.displayedCurveTemperature,
                 quietFanFraction: store.quietFanFraction,
                 showCurrentTemperature: $showCurrentTemperature,
@@ -48,12 +61,12 @@ struct ThermalCurveView: View {
 
             HStack(spacing: 14) {
                 Label(
-                    "System below \(Int(store.activeCurve.activationTemperature))°C",
+                    "System below \(Int(store.activeScheduleCurve.activationTemperature))°C",
                     systemImage: "arrow.uturn.backward.circle"
                 )
                 if showCurrentTemperature, let temperature = store.displayedCurveTemperature {
                     Label(
-                        store.selectedMode == .autoBoost
+                        store.isCurveMode
                             ? "\(Int(temperature.rounded()))°C control input"
                             : "\(Int(temperature.rounded()))°C current temperature",
                         systemImage: "thermometer.medium"
@@ -63,7 +76,7 @@ struct ThermalCurveView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            if store.selectedMode == .autoBoost {
+            if store.isCurveMode {
                 Text(verbatim: store.curveStatus)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -101,7 +114,7 @@ struct CurveEditorView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
                             Picker("Editing preset", selection: profileSelection) {
-                                ForEach(store.curveProfiles) { profile in
+                                ForEach(store.curveProfiles.filter { !$0.isAIGenerated }) { profile in
                                     Text(profile.isBuiltIn ? profile.localizedName : "★ \(profile.name)").tag(profile.id)
                                 }
                             }

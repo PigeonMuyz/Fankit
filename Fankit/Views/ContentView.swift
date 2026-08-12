@@ -4,6 +4,7 @@ private enum SidebarDestination: String, Identifiable {
     case overview
     case temperatures
     case curves
+    case aiScheduling
 
     var id: Self { self }
 
@@ -12,6 +13,7 @@ private enum SidebarDestination: String, Identifiable {
         case .overview: "Overview"
         case .temperatures: "Temperatures"
         case .curves: "Curve Editor"
+        case .aiScheduling: "AI Scheduling"
         }
     }
 
@@ -20,6 +22,7 @@ private enum SidebarDestination: String, Identifiable {
         case .overview: "gauge.with.dots.needle.67percent"
         case .temperatures: "thermometer.medium"
         case .curves: "chart.xyaxis.line"
+        case .aiScheduling: "sparkles"
         }
     }
 }
@@ -38,6 +41,7 @@ struct ContentView: View {
 
                 Section("Control") {
                     SidebarRow(destination: .curves)
+                    SidebarRow(destination: .aiScheduling)
                 }
             }
             .listStyle(.sidebar)
@@ -52,6 +56,9 @@ struct ContentView: View {
                         .disabled(store.isRefreshing)
                     }
                 }
+        }
+        .onChange(of: store.aiWorkflowRequestID) { _, _ in
+            selection = .aiScheduling
         }
     }
 
@@ -68,6 +75,8 @@ struct ContentView: View {
             .navigationTitle("Temperatures")
         case .curves:
             CurveEditorView(store: store)
+        case .aiScheduling:
+            AISchedulingView(store: store)
         }
     }
 }

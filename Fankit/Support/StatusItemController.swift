@@ -61,6 +61,9 @@ final class StatusItemController: NSObject {
             quit: { NSApp.terminate(nil) },
             onPreferredSizeChange: { [weak self] size in
                 self?.updatePopoverContentSize(size)
+            },
+            openAIWorkflow: { [weak self] in
+                self?.showAIWorkflow()
             }
         ).environment(\.locale, language.locale))
         hostingController.view.wantsLayer = true
@@ -119,7 +122,7 @@ final class StatusItemController: NSObject {
     }
 
     private func updatePopoverContentSize(for mode: FanControlMode) {
-        let height: CGFloat = mode == .autoBoost ? 500 : 350
+        let height: CGFloat = mode == .autoBoost || mode == .aiScheduling ? 500 : 350
         updatePopoverContentSize(NSSize(width: 380, height: height))
     }
 
@@ -148,6 +151,11 @@ final class StatusItemController: NSObject {
         popover.performClose(nil)
         openSettings()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func showAIWorkflow() {
+        store.requestAIWorkflow()
+        showMainWindow()
     }
 }
 

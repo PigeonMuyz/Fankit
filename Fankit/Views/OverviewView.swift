@@ -108,6 +108,7 @@ struct OverviewView: View {
         if store.errorMessage != nil { return "Needs Attention" }
         if store.selectedMode == .maximum { return "Maximum Cooling" }
         if store.selectedMode == .autoBoost { return "Automatic Cooling" }
+        if store.selectedMode == .aiScheduling { return "AI Cooling" }
         return "System Cooling"
     }
 
@@ -119,6 +120,8 @@ struct OverviewView: View {
             L10n.string("All available fans are running at maximum speed")
         case .autoBoost:
             "\(store.activeCurve.localizedName) · \(store.curveStatus)"
+        case .aiScheduling:
+            "\(store.activeScheduleCurve.localizedName) · \(store.curveStatus)"
         }
     }
 
@@ -135,6 +138,7 @@ struct OverviewView: View {
         case .system: "checkmark.circle.fill"
         case .maximum: "fan.fill"
         case .autoBoost: "chart.xyaxis.line"
+        case .aiScheduling: "sparkles"
         }
     }
 
@@ -143,6 +147,7 @@ struct OverviewView: View {
         case .system: .green
         case .maximum: .red
         case .autoBoost: .blue
+        case .aiScheduling: .purple
         }
     }
 
