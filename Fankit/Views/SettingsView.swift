@@ -1,0 +1,241 @@
+import ServiceManagement
+import SwiftUI
+
+struct SettingsView: View {
+    let store: FanControlStore
+
+    var body: some View {
+        TabView {
+            GeneralSettingsView()
+                .tabItem { Label("General", systemImage: "gearshape") }
+
+            MenuBarSettingsView(store: store)
+                .tabItem { Label("Menu Bar", systemImage: "menubar.rectangle") }
+
+            SafetySettingsView(store: store)
+                .tabItem { Label("Safety", systemImage: "checkmark.shield") }
+        }
+        .frame(width: 560, height: 430)
+        .scenePadding()
+    }
+}
+
+private struct GeneralSettingsView: View {
+    @AppStorage(PreferenceKey.hideDockIcon) private var hideDockIcon = false
+    @AppStorage(PreferenceKey.appLanguage) private var languageRaw = AppLanguage.system.rawValue
+    @AppStorage("refreshInterval") private var refreshInterval = 2.0
+    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var launchMessage: String?
+
+    private var language: Binding<AppLanguage> {
+        Binding(
+            get: { AppLanguage(rawValue: languageRaw) ?? .system },
+            set: { languageRaw = $0.rawValue }
+        )
+    }
+
+    var body: some View {
+        Form {
+            Section("Startup") {
+                Toggle("Launch Fankit at login", isOn: Binding(
+                    get: { launchAtLogin },
+                    set: updateLaunchAtLogin
+                ))
+                Toggle("Hide Fankit in the Dock", isOn: $hideDockIcon)
+                Text("The menu bar item remains available when the Dock icon is hidden.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let launchMessage {
+                    Label(launchMessage, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            Section("Language") {
+                Picker("Application language", selection: language) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.title).tag(language)
+                    }
+                }
+                Text("The selected language is applied throughout Fankit.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Monitoring") {
+                Picker("Update interval", selection: $refreshInterval) {
+                    Text("1 second").tag(1.0)
+                    Text("2 seconds").tag(2.0)
+                    Text("5 seconds").tag(5.0)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
+    }
+
+    private func updateLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            launchAtLogin = enabled
+            launchMessage = nil
+        } catch {
+            NSLog("Fankit login item error: %@", error.localizedDescription)
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+            launchMessage = L10n.string("Unable to change the login item setting.")
+        }
+    }
+}
+
+private struct MenuBarSettingsView: View {
+    let store: FanControlStore
+
+    @AppStorage(PreferenceKey.menuBarShowCPU) private var showCPU = true
+    @AppStorage(PreferenceKey.menuBarShowGPU) private var showGPU = true
+    @AppStorage(PreferenceKey.menuBarShowFanSpeed) private var showFanSpeed = true
+    @AppStorage("menuBarIconStyle") private var iconStyleRaw = MenuBarIconStyle.thermometer.rawValue
+    @AppStorage("menuBarCustomSymbol") private var customSymbol = "thermometer.medium"
+
+    private var iconStyle: Binding<MenuBarIconStyle> {
+        Binding(
+            get: { MenuBarIconStyle(rawValue: iconStyleRaw) ?? .thermometer },
+            set: { iconStyleRaw = $0.rawValue }
+        )
+    }
+
+    private var hasTextItem: Bool { showCPU || showGPU || showFanSpeed }
+
+    var body: some View {
+        Form {
+            Section("Displayed Items") {
+                Toggle("CPU temperature", isOn: $showCPU)
+                Toggle("GPU temperature", isOn: $showGPU)
+                Toggle("Fan speed", isOn: $showFanSpeed)
+            }
+
+            Section("Icon") {
+                Picker("Menu bar icon", selection: iconStyle) {
+                    ForEach(MenuBarIconStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+                if iconStyle.wrappedValue == .custom {
+                    TextField("SF Symbol name", text: $customSymbol, prompt: Text("thermometer.medium"))
+                    Label(
+                        "Use an SF Symbols name, for example fan, cpu, or thermometer.high.",
+                        systemImage: "info.circle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                if !hasTextItem && iconStyle.wrappedValue == .hidden {
+                    Label(
+                        "A thermometer icon will remain visible so you can reopen Fankit.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                }
+            }
+
+            Section("Preview") {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    MenuBarStatusPreview(presentation: previewPresentation)
+                }
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, minHeight: 30)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(.separator.opacity(0.55), lineWidth: 0.5)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var previewPresentation: MenuBarStatusPresentation {
+        MenuBarStatusPresentation(
+            cpuTemperature: store.hottestCPUTemperature,
+            gpuTemperature: store.hottestGPUTemperature,
+            rpm: store.fastestFanRPM,
+            showCPU: showCPU,
+            showGPU: showGPU,
+            showFanSpeed: showFanSpeed,
+            iconStyle: iconStyle.wrappedValue,
+            customSymbol: customSymbol
+        )
+    }
+}
+
+private struct MenuBarStatusPreview: NSViewRepresentable {
+    let presentation: MenuBarStatusPresentation
+
+    func makeNSView(context: Context) -> StatusItemLabelView {
+        let view = StatusItemLabelView(frame: .zero)
+        view.configure(presentation)
+        return view
+    }
+
+    func updateNSView(_ view: StatusItemLabelView, context: Context) {
+        view.configure(presentation)
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: StatusItemLabelView,
+        context: Context
+    ) -> CGSize? {
+        nsView.intrinsicContentSize
+    }
+}
+
+private struct SafetySettingsView: View {
+    let store: FanControlStore
+
+    var body: some View {
+        Form {
+            Section("Fankit") {
+                LabeledContent("Saved mode", value: store.selectedMode.title)
+                Label(
+                    "The last successful mode is restored only after the signed control helper is ready.",
+                    systemImage: "clock.arrow.circlepath"
+                )
+                .foregroundStyle(.secondary)
+                Label(
+                    "When Fankit quits, the privileged helper restores System mode. It is reapplied safely on the next launch.",
+                    systemImage: "checkmark.shield"
+                )
+                .foregroundStyle(.secondary)
+                Label(
+                    "Auto Boost returns control to macOS after any sensor or helper failure.",
+                    systemImage: "thermometer.and.liquid.waves"
+                )
+                .foregroundStyle(.secondary)
+            }
+
+            Section("Control Helper") {
+                LabeledContent("Status", value: store.helperStatus.title)
+                HStack {
+                    Text(store.helperStatus.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(store.helperStatus.actionTitle) {
+                        store.installOrApproveHelper()
+                    }
+                    .disabled(store.isChangingHelper || store.helperStatus == .ready)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
