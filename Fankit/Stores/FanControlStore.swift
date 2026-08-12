@@ -455,12 +455,6 @@ final class FanControlStore {
         }
         let restored = await applyMode(startupMode, persist: false)
         didRestoreStartupMode = restored
-        if restored {
-            controlMessage = L10n.format(
-                "Restored %@ from the previous session.",
-                startupMode.title
-            )
-        }
     }
 
     private func resetCurveRuntimeState(keepTemperature: Bool = false) {

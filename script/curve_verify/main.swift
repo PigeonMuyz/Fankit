@@ -1,5 +1,9 @@
 import Foundation
 
+enum L10n {
+    static func string(_ key: String) -> String { key }
+}
+
 private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
     guard condition() else {
         fputs("Curve verification failed: \(message)\n", stderr)

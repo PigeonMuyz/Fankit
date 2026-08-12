@@ -59,6 +59,13 @@
 "Fastest fan" = "Fastest fan";
 "Fans" = "Fans";
 "Fan mode" = "Fan mode";
+"Scheduling" = "Scheduling";
+"System Scheduling" = "System Scheduling";
+"Extreme Cooling" = "Extreme Cooling";
+"Custom Scheduling" = "Custom Scheduling";
+"AI Scheduling" = "AI Scheduling";
+"Choose a scheduling mode" = "Choose a scheduling mode";
+"Current Preset" = "Current Preset";
 "Max" = "Max";
 "Auto Boost" = "Auto Boost";
 "Thermal Zones" = "Thermal Zones";
@@ -187,7 +194,6 @@
 "RPM only" = "RPM only";
 "Remove" = "Remove";
 "Requires a signed privileged helper" = "Requires a signed privileged helper";
-"Restored %@ from the previous session." = "Restored %@ from the previous session.";
 "Right Thunderbolt" = "Right Thunderbolt";
 "SSD / NAND" = "SSD / NAND";
 "Saved %@." = "Saved %@.";

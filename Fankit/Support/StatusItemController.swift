@@ -54,13 +54,18 @@ final class StatusItemController: NSObject {
         let language = AppLanguage(rawValue: currentLanguageRaw) ?? .system
         popover.behavior = .transient
         popover.animates = true
-        popover.contentSize = NSSize(width: 380, height: 350)
-        popover.contentViewController = NSHostingController(rootView: MenuBarPanelView(
+        let hostingController = NSHostingController(rootView: MenuBarPanelView(
             store: store,
             showMainWindow: { [weak self] in self?.showMainWindow() },
             showSettings: { [weak self] in self?.showSettings() },
-            quit: { NSApp.terminate(nil) }
+            quit: { NSApp.terminate(nil) },
+            onPreferredSizeChange: { [weak self] size in
+                self?.updatePopoverContentSize(size)
+            }
         ).environment(\.locale, language.locale))
+        hostingController.view.wantsLayer = true
+        popover.contentViewController = hostingController
+        updatePopoverContentSize(for: store.selectedMode)
     }
 
     private func observeChanges() {
@@ -105,6 +110,17 @@ final class StatusItemController: NSObject {
         labelView.configure(presentation)
         statusItem.length = labelView.preferredWidth + 4
         statusItem.button?.toolTip = labelView.accessibilitySummary
+    }
+
+    private func updatePopoverContentSize(_ size: CGSize) {
+        let contentSize = NSSize(width: size.width, height: size.height)
+        guard popover.contentSize != contentSize else { return }
+        popover.contentSize = contentSize
+    }
+
+    private func updatePopoverContentSize(for mode: FanControlMode) {
+        let height: CGFloat = mode == .autoBoost ? 500 : 350
+        updatePopoverContentSize(NSSize(width: 380, height: height))
     }
 
     @objc private func togglePopover() {

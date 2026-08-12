@@ -1,3 +1,4 @@
+import Charts
 import SwiftUI
 
 struct MenuBarPanelView: View {
@@ -5,6 +6,7 @@ struct MenuBarPanelView: View {
     let showMainWindow: () -> Void
     let showSettings: () -> Void
     let quit: () -> Void
+    var onPreferredSizeChange: (CGSize) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -12,7 +14,7 @@ struct MenuBarPanelView: View {
                 Label("Fankit", systemImage: "fan")
                     .font(.headline)
                 Spacer()
-                Text(store.selectedMode.title)
+                Text(verbatim: selectedSchedule.title)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)
@@ -40,18 +42,7 @@ struct MenuBarPanelView: View {
 
             Divider()
 
-            Picker("Fan mode", selection: Binding(
-                get: { store.selectedMode },
-                set: { store.selectMode($0) }
-            )) {
-                ForEach(FanControlMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .disabled(!store.canControlFans)
-            .help("Change fan control mode")
+            MenuBarScheduleMenu(store: store)
 
             if store.canControlFans {
                 controlSummary
@@ -71,28 +62,33 @@ struct MenuBarPanelView: View {
             .buttonStyle(.borderless)
         }
         .padding(16)
-        .frame(width: 380, height: 350)
+        .frame(width: 380, height: preferredHeight)
+        .onAppear {
+            reportPreferredSize()
+        }
+        .onChange(of: selectedSchedule) { _, _ in
+            reportPreferredSize()
+        }
+    }
+
+    private var preferredHeight: CGFloat {
+        selectedSchedule == .customScheduling ? 500 : 350
+    }
+
+    private var selectedSchedule: MenuBarSchedule {
+        MenuBarSchedule(mode: store.selectedMode)
+    }
+
+    private func reportPreferredSize() {
+        onPreferredSizeChange(CGSize(width: 380, height: preferredHeight))
     }
 
     @ViewBuilder
     private var controlSummary: some View {
-        if store.selectedMode == .autoBoost {
-            VStack(alignment: .leading, spacing: 7) {
-                LabeledContent("Active Preset", value: store.activeCurve.localizedName)
-                LabeledContent(
-                    "Control Temperature",
-                    value: temperatureText(store.curveControlTemperature)
-                )
-                Label {
-                    Text(verbatim: store.curveStatus)
-                } icon: {
-                    Image(systemName: "waveform.path.ecg")
-                }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-        } else {
+        switch selectedSchedule {
+        case .customScheduling:
+            customScheduleSummary
+        case .systemScheduling, .extremeCooling:
             Label(
                 store.selectedMode == .maximum
                     ? "All available fans are running at maximum speed"
@@ -101,6 +97,36 @@ struct MenuBarPanelView: View {
             )
             .font(.callout)
             .foregroundStyle(.secondary)
+        case .aiScheduling:
+            EmptyView()
+        }
+    }
+
+    private var customScheduleSummary: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Label("Current Preset", systemImage: "slider.horizontal.3")
+                    .font(.callout.weight(.medium))
+                Spacer(minLength: 8)
+                Picker("Current Preset", selection: Binding(
+                    get: { store.activeCurveID },
+                    set: store.selectCurve
+                )) {
+                    ForEach(store.curveProfiles) { profile in
+                        Text(verbatim: profile.isBuiltIn ? profile.localizedName : "★ \(profile.name)")
+                            .tag(profile.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+            }
+
+            MenuBarReadOnlyCurveChart(
+                profile: store.activeCurve,
+                currentTemperature: store.displayedCurveTemperature
+            )
+            .frame(height: 132)
         }
     }
 
@@ -133,6 +159,109 @@ struct MenuBarPanelView: View {
 
     private func rpmText(_ value: Double?) -> String {
         value.map { "\(Int($0.rounded()).formatted()) RPM" } ?? "-- RPM"
+    }
+}
+
+private struct MenuBarScheduleMenu: View {
+    let store: FanControlStore
+
+    private var selectedSchedule: MenuBarSchedule {
+        MenuBarSchedule(mode: store.selectedMode)
+    }
+
+    var body: some View {
+        Menu {
+            Section {
+                ForEach(MenuBarSchedule.allCases) { schedule in
+                    Button {
+                        guard let mode = schedule.fanControlMode else { return }
+                        store.selectMode(mode)
+                    } label: {
+                        HStack {
+                            Label {
+                                Text(verbatim: schedule.title)
+                            } icon: {
+                                Image(systemName: schedule.systemImage)
+                            }
+                            Spacer()
+                            if schedule == selectedSchedule {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                    .disabled(!store.canControlFans || !schedule.isAvailable)
+                }
+            } header: {
+                Text(verbatim: L10n.string("Scheduling"))
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Label {
+                    Text(verbatim: selectedSchedule.title)
+                } icon: {
+                    Image(systemName: selectedSchedule.systemImage)
+                }
+                .font(.callout.weight(.medium))
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.quaternary.opacity(0.65), in: RoundedRectangle(cornerRadius: 8))
+        }
+        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
+        .disabled(!store.canControlFans)
+        .help(L10n.string("Choose a scheduling mode"))
+    }
+}
+
+private struct MenuBarReadOnlyCurveChart: View {
+    let profile: ThermalCurveProfile
+    let currentTemperature: Double?
+
+    var body: some View {
+        Chart {
+            ForEach(profile.normalizedPoints) { point in
+                AreaMark(
+                    x: .value("Temperature", point.temperature),
+                    y: .value("Fan demand", point.fanFraction * 100)
+                )
+                .foregroundStyle(.blue.opacity(0.14))
+                .interpolationMethod(.linear)
+
+                LineMark(
+                    x: .value("Temperature", point.temperature),
+                    y: .value("Fan demand", point.fanFraction * 100)
+                )
+                .foregroundStyle(.blue)
+                .lineStyle(.init(lineWidth: 2))
+                .interpolationMethod(.linear)
+
+                PointMark(
+                    x: .value("Temperature", point.temperature),
+                    y: .value("Fan demand", point.fanFraction * 100)
+                )
+                .foregroundStyle(.blue)
+                .symbolSize(42)
+            }
+
+            if let currentTemperature {
+                RuleMark(x: .value("Current", currentTemperature))
+                    .foregroundStyle(.orange)
+                    .lineStyle(.init(lineWidth: 1.5, dash: [4, 3]))
+            }
+        }
+        .chartXScale(domain: 35...100)
+        .chartYScale(domain: 0...100)
+        .chartXAxisLabel("Temperature (°C)")
+        .chartYAxisLabel("Fan (%)")
+        .chartLegend(.hidden)
+        .accessibilityLabel(
+            Text(verbatim: L10n.format("Fan curve for %@", profile.localizedName))
+        )
     }
 }
 

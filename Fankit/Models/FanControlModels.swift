@@ -16,6 +16,52 @@ enum FanControlMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum MenuBarSchedule: String, CaseIterable, Identifiable {
+    case systemScheduling
+    case extremeCooling
+    case customScheduling
+    case aiScheduling
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .systemScheduling: L10n.string("System Scheduling")
+        case .extremeCooling: L10n.string("Extreme Cooling")
+        case .customScheduling: L10n.string("Custom Scheduling")
+        case .aiScheduling: L10n.string("AI Scheduling")
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .systemScheduling: "checkmark.circle"
+        case .extremeCooling: "fan.fill"
+        case .customScheduling: "chart.xyaxis.line"
+        case .aiScheduling: "sparkles"
+        }
+    }
+
+    var fanControlMode: FanControlMode? {
+        switch self {
+        case .systemScheduling: .system
+        case .extremeCooling: .maximum
+        case .customScheduling: .autoBoost
+        case .aiScheduling: nil
+        }
+    }
+
+    var isAvailable: Bool { fanControlMode != nil }
+
+    init(mode: FanControlMode) {
+        switch mode {
+        case .system: self = .systemScheduling
+        case .maximum: self = .extremeCooling
+        case .autoBoost: self = .customScheduling
+        }
+    }
+}
+
 struct FanSnapshot: Identifiable, Equatable {
     let index: Int
     let name: String

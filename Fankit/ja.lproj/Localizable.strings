@@ -59,6 +59,13 @@
 "Fastest fan" = "最高回転ファン";
 "Fans" = "ファン";
 "Fan mode" = "ファンモード";
+"Scheduling" = "スケジュール";
+"System Scheduling" = "システム制御";
+"Extreme Cooling" = "極冷却";
+"Custom Scheduling" = "カスタム制御";
+"AI Scheduling" = "AI 制御";
+"Choose a scheduling mode" = "スケジュールを選択";
+"Current Preset" = "現在のプリセット";
 "Max" = "最大";
 "Auto Boost" = "自動ブースト";
 "Thermal Zones" = "温度ゾーン";
@@ -187,7 +194,6 @@
 "RPM only" = "回転数のみ";
 "Remove" = "削除";
 "Requires a signed privileged helper" = "署名済みの特権ヘルパーが必要です";
-"Restored %@ from the previous session." = "前回の %@ モードを復元しました。";
 "Right Thunderbolt" = "右側 Thunderbolt";
 "SSD / NAND" = "SSD / NAND";
 "Saved %@." = "%@ を保存しました。";

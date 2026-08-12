@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_FILE="$ROOT_DIR/Fankit.xcodeproj"
 SCHEME="Fankit"
 CONFIGURATION="Release"
-VERSION="${1:-1.0.0}"
+VERSION="${1:-1.0.1}"
 DERIVED_DATA="${DERIVED_DATA:-$ROOT_DIR/.derivedData/release}"
 DIST_DIR="$ROOT_DIR/dist"
 STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fankit-dmg.XXXXXX")"
@@ -13,6 +13,22 @@ RW_IMAGE="$STAGING_DIR/Fankit-rw.dmg"
 MOUNT_DIR=""
 DMG_PATH="$DIST_DIR/Fankit-$VERSION.dmg"
 CHECKSUM_PATH="$DMG_PATH.sha256"
+
+SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
+if [[ -z "$SIGNING_IDENTITY" ]]; then
+  SIGNING_IDENTITY="$(security find-identity -p codesigning -v | awk '/valid identities found/{exit} /^[[:space:]]*[0-9]+\)/ {print $2; exit}')"
+fi
+if [[ -z "$SIGNING_IDENTITY" ]]; then
+  echo "No code-signing identity found. Fankit requires a signed app to register its control helper." >&2
+  exit 1
+fi
+
+SIGNING_SETTINGS=(
+  CODE_SIGNING_ALLOWED=YES
+  CODE_SIGNING_REQUIRED=YES
+  CODE_SIGN_STYLE=Manual
+  CODE_SIGN_IDENTITY="$SIGNING_IDENTITY"
+)
 
 cleanup() {
   if [[ -n "$MOUNT_DIR" ]]; then
@@ -37,8 +53,7 @@ xcodebuild \
   -configuration "$CONFIGURATION" \
   -destination "generic/platform=macOS" \
   -derivedDataPath "$DERIVED_DATA" \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
+  "${SIGNING_SETTINGS[@]}" \
   build
 
 BUILT_APP="$DERIVED_DATA/Build/Products/$CONFIGURATION/Fankit.app"

@@ -59,6 +59,13 @@
 "Fastest fan" = "最高風扇轉速";
 "Fans" = "風扇";
 "Fan mode" = "風扇模式";
+"Scheduling" = "調度";
+"System Scheduling" = "系統調度";
+"Extreme Cooling" = "極致散熱";
+"Custom Scheduling" = "自訂調度";
+"AI Scheduling" = "AI 調度";
+"Choose a scheduling mode" = "選擇調度模式";
+"Current Preset" = "目前預設";
 "Max" = "最大";
 "Auto Boost" = "自動增強";
 "Thermal Zones" = "溫區";
@@ -187,7 +194,6 @@
 "RPM only" = "淨係轉速";
 "Remove" = "移除";
 "Requires a signed privileged helper" = "需要已簽署嘅特權 Helper";
-"Restored %@ from the previous session." = "已恢復上次工作階段嘅 %@ 模式。";
 "Right Thunderbolt" = "右邊 Thunderbolt";
 "SSD / NAND" = "SSD / NAND";
 "Saved %@." = "已儲存 %@。";

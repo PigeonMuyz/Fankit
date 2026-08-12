@@ -45,9 +45,12 @@ Create a local Release app and a drag-to-install DMG with:
 ./script/build_release_dmg.sh
 ```
 
-The output is written to `dist/Fankit-1.0.0.dmg` together with its SHA-256
-checksum. The release build is packaged without a Developer ID signature; a
-notarized distribution still requires the owner's Apple Developer credentials.
+The output is written to `dist/Fankit-1.0.1.dmg` together with its SHA-256
+checksum. The script automatically selects the first local code-signing
+identity, or you can choose one explicitly with `SIGNING_IDENTITY=<identity>`.
+The app still needs one-time approval under **System Settings → General →
+Login Items & Extensions**. A notarized distribution still requires a
+Developer ID signature and the owner's Apple Developer credentials.
 
 ## Signing for open-source builds
 
