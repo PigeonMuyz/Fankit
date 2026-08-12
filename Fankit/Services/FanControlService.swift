@@ -59,6 +59,7 @@ final class FanControlService {
     private let daemon = SMAppService.daemon(plistName: FanControlHelperConstants.daemonPlistName)
     private var connection: NSXPCConnection?
     private var heartbeatTimer: Timer?
+    private var hasAttemptedAutomaticRepair = false
 
     var status: ControlHelperStatus = .notInstalled
     var canWrite: Bool { status == .ready }
@@ -85,7 +86,27 @@ final class FanControlService {
                 try await ping()
                 status = .ready
             } catch {
-                status = .failed(error.localizedDescription)
+                guard !hasAttemptedAutomaticRepair else {
+                    status = .failed(error.localizedDescription)
+                    break
+                }
+
+                // Updating the app replaces the on-disk helper while launchd may
+                // still be running the previous executable. Its live signature
+                // then fails validation, so refresh the registration once before
+                // asking the user to repair anything manually.
+                hasAttemptedAutomaticRepair = true
+                NSLog("Fankit helper connection failed; refreshing its registration: %@", error.localizedDescription)
+                do {
+                    status = try await restartDaemonAfterUpdate()
+                } catch {
+                    NSLog("Fankit helper could not restart in place; using legacy registration repair: %@", error.localizedDescription)
+                    do {
+                        status = try await registerCurrentDaemon(replacingExisting: true)
+                    } catch {
+                        status = .failed(error.localizedDescription)
+                    }
+                }
             }
         @unknown default:
             status = .failed(L10n.string("Unknown helper status."))
@@ -100,13 +121,9 @@ final class FanControlService {
             return status
         }
 
-        invalidateConnection()
-        if daemon.status == .enabled {
-            try await unregisterCurrentDaemon()
-        }
-
         do {
-            try daemon.register()
+            hasAttemptedAutomaticRepair = true
+            status = try await registerCurrentDaemon(replacingExisting: daemon.status == .enabled)
         } catch {
             NSLog("Fankit helper registration error: %@", error.localizedDescription)
             let message = L10n.string("Unable to update the control helper.")
@@ -114,14 +131,10 @@ final class FanControlService {
             throw FanControlError.helperUnavailable(message)
         }
 
-        for _ in 0..<30 where daemon.status == .notFound || daemon.status == .notRegistered {
-            try? await Task.sleep(for: .milliseconds(100))
-        }
-
         if daemon.status == .requiresApproval {
             SMAppService.openSystemSettingsLoginItems()
         }
-        return await refreshStatus()
+        return status
     }
 
     func openApprovalSettings() {
@@ -165,6 +178,106 @@ final class FanControlService {
                 }
             }
         }
+    }
+
+    private func registerCurrentDaemon(replacingExisting: Bool) async throws -> ControlHelperStatus {
+        invalidateConnection()
+        if replacingExisting {
+            try await unregisterCurrentDaemon()
+        }
+
+        do {
+            try daemon.register()
+        } catch {
+            // Service Management can report a denied launch at the same time as
+            // it moves the service into requiresApproval. Preserve that precise
+            // state so the UI asks for one approval instead of offering Repair.
+            if daemon.status == .requiresApproval
+                || (error as NSError).code == kSMErrorLaunchDeniedByUser
+            {
+                status = .requiresApproval
+                return status
+            }
+            throw error
+        }
+
+        return await waitForDaemonToBecomeReady()
+    }
+
+    private func restartDaemonAfterUpdate() async throws -> ControlHelperStatus {
+        // Do not attach a client-side code requirement to this one-shot
+        // connection. Immediately after an update, the old process no longer
+        // matches the helper file that replaced it on disk. The helper still
+        // authenticates this app before accepting the connection, and this
+        // channel can only request a safe restore-and-exit operation.
+        invalidateConnection()
+        let restartConnection = NSXPCConnection(
+            machServiceName: FanControlHelperConstants.machServiceName,
+            options: .privileged
+        )
+        restartConnection.remoteObjectInterface = NSXPCInterface(with: FanControlHelperProtocol.self)
+        restartConnection.activate()
+
+        defer { restartConnection.invalidate() }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let proxy = restartConnection.remoteObjectProxyWithErrorHandler { error in
+                continuation.resume(throwing: error)
+            }
+            guard let helper = proxy as? FanControlHelperProtocol else {
+                continuation.resume(throwing: FanControlError.helperUnavailable(
+                    L10n.string("Unable to create the helper XPC proxy.")
+                ))
+                return
+            }
+            helper.restartAfterUpdate { errorMessage in
+                if let errorMessage {
+                    continuation.resume(throwing: FanControlError.helperUnavailable(
+                        self.localizedHelperError(errorMessage)
+                    ))
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+
+        return await waitForDaemonToBecomeReady()
+    }
+
+    private func waitForDaemonToBecomeReady() async -> ControlHelperStatus {
+        var lastConnectionError: Error?
+
+        for attempt in 0..<50 {
+            switch daemon.status {
+            case .enabled:
+                status = .enabled
+                do {
+                    try await ping()
+                    status = .ready
+                    return status
+                } catch {
+                    lastConnectionError = error
+                    invalidateConnection()
+                }
+            case .requiresApproval:
+                status = .requiresApproval
+                return status
+            case .notRegistered, .notFound:
+                break
+            @unknown default:
+                status = .failed(L10n.string("Unknown helper status."))
+                return status
+            }
+
+            if attempt < 49 {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+
+        status = .failed(
+            lastConnectionError?.localizedDescription
+                ?? L10n.string("Unable to communicate with the control helper.")
+        )
+        return status
     }
 
     private func call(

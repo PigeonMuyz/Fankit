@@ -37,19 +37,28 @@ Run the localization completeness audit with:
 The project targets macOS 14 (Sonoma) and newer on Apple silicon. On first use, click
 **Enable Control** and approve Fankit under **System Settings → General →
 Login Items & Extensions** if macOS asks. Monitoring remains available without
-the helper.
+the helper. After an app update, Fankit asks the authenticated old helper to
+restore System mode and exit, then lets launchd start the updated helper without
+changing the existing approval switch.
 
 ## Release build
 
 Create a local Release app and a drag-to-install DMG with:
 
 ```sh
-./script/build_release_dmg.sh
+./script/build_release_dmg.sh 1.0.2
 ```
 
 The output is written to `dist/Fankit-1.0.2.dmg` together with its SHA-256
-checksum. The script automatically selects the first local code-signing
-identity, or you can choose one explicitly with `SIGNING_IDENTITY=<identity>`.
+checksum. The script automatically selects the local code-signing identity that
+matches the currently registered Fankit helper, or you can choose
+one explicitly with `SIGNING_IDENTITY=<identity>`. If several identities exist
+and no prior Fankit registration identifies the correct team, the script stops
+instead of silently changing developer teams and invalidating the user's prior
+approval.
+The version argument is written to both `CFBundleShortVersionString` and the
+monotonically increasing `CFBundleVersion`, so Service Management can recognize
+the new helper registration as an app update.
 The app still needs one-time approval under **System Settings → General →
 Login Items & Extensions**. A notarized distribution still requires a
 Developer ID signature and the owner's Apple Developer credentials.

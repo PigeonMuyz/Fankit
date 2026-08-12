@@ -14,20 +14,19 @@ MOUNT_DIR=""
 DMG_PATH="$DIST_DIR/Fankit-$VERSION.dmg"
 CHECKSUM_PATH="$DMG_PATH.sha256"
 
-SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
-if [[ -z "$SIGNING_IDENTITY" ]]; then
-  SIGNING_IDENTITY="$(security find-identity -p codesigning -v | awk '/valid identities found/{exit} /^[[:space:]]*[0-9]+\)/ {print $2; exit}')"
-fi
-if [[ -z "$SIGNING_IDENTITY" ]]; then
-  echo "No code-signing identity found. Fankit requires a signed app to register its control helper." >&2
-  exit 1
-fi
+# shellcheck source=signing_identity.sh
+source "$ROOT_DIR/script/signing_identity.sh"
+SIGNING_IDENTITY="$(
+  fankit_resolve_signing_identity "$DERIVED_DATA/Build/Products/$CONFIGURATION/Fankit.app"
+)"
 
 SIGNING_SETTINGS=(
   CODE_SIGNING_ALLOWED=YES
   CODE_SIGNING_REQUIRED=YES
   CODE_SIGN_STYLE=Manual
   CODE_SIGN_IDENTITY="$SIGNING_IDENTITY"
+  MARKETING_VERSION="$VERSION"
+  CURRENT_PROJECT_VERSION="$VERSION"
 )
 
 cleanup() {
@@ -58,6 +57,13 @@ xcodebuild \
 
 BUILT_APP="$DERIVED_DATA/Build/Products/$CONFIGURATION/Fankit.app"
 test -d "$BUILT_APP"
+
+BUILT_MARKETING_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$BUILT_APP/Contents/Info.plist")"
+BUILT_BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$BUILT_APP/Contents/Info.plist")"
+if [[ "$BUILT_MARKETING_VERSION" != "$VERSION" || "$BUILT_BUNDLE_VERSION" != "$VERSION" ]]; then
+  echo "Built app version mismatch: expected $VERSION, got $BUILT_MARKETING_VERSION ($BUILT_BUNDLE_VERSION)." >&2
+  exit 1
+fi
 
 APP_SIZE_KB="$(du -sk "$BUILT_APP" | awk '{print $1}')"
 IMAGE_SIZE_MB=$((APP_SIZE_KB / 1024 + 32))

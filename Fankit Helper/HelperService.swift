@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import OSLog
 
@@ -150,4 +151,13 @@ final class HelperService: NSObject, FanControlHelperProtocol {
     }
     func heartbeat() { state.heartbeat(client: clientID) }
     func disconnectAndRestore(reply: @escaping (String?) -> Void) { state.restore(client: clientID, reply: reply) }
+    func restartAfterUpdate(reply: @escaping (String?) -> Void) {
+        state.restore(client: nil) { errorMessage in
+            reply(errorMessage)
+            guard errorMessage == nil else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) {
+                exit(EXIT_SUCCESS)
+            }
+        }
+    }
 }

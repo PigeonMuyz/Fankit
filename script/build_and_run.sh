@@ -11,14 +11,9 @@ APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 HELPER_BINARY="$APP_BUNDLE/Contents/MacOS/FankitHelper"
 DAEMON_PLIST="$APP_BUNDLE/Contents/Library/LaunchDaemons/io.github.pigeonmuyz.fankit.helper.plist"
 
-SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
-if [[ -z "$SIGNING_IDENTITY" ]]; then
-  SIGNING_IDENTITY="$(security find-identity -p codesigning -v | awk '/valid identities found/{exit} /^[[:space:]]*[0-9]+\)/ {print $2; exit}')"
-fi
-if [[ -z "$SIGNING_IDENTITY" ]]; then
-  echo "No code-signing identity found. Fankit requires a signed app to register its control helper." >&2
-  exit 1
-fi
+# shellcheck source=signing_identity.sh
+source "$ROOT_DIR/script/signing_identity.sh"
+SIGNING_IDENTITY="$(fankit_resolve_signing_identity "$APP_BUNDLE")"
 
 SIGNING_SETTINGS=(
   CODE_SIGNING_ALLOWED=YES
