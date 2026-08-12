@@ -36,7 +36,9 @@ final class FanController {
 
     func setMaximum() throws {
         let count = try fanCount()
-        let targets = try (0..<count).map { try safeBounds(for: $0).maximum }
+        let targets = try (0..<count).map { fan in
+            maximumTarget(for: try safeBounds(for: fan))
+        }
         try markOverridePending()
         do {
             try acquireManualControl(fans: Array(0..<count), targets: targets)
@@ -52,7 +54,7 @@ final class FanController {
         let bounds = try safeBounds(for: fan)
         let target = requestedRPM <= 0
             ? 0
-            : min(max(requestedRPM, bounds.minimum), bounds.maximum)
+            : min(requestedRPM, maximumTarget(for: bounds))
 
         try markOverridePending()
         do {
@@ -135,10 +137,17 @@ final class FanController {
     private func safeBounds(for fan: Int) throws -> (minimum: Double, maximum: Double) {
         let minimum = try smc.read("F\(fan)Mn").number()
         let maximum = try smc.read("F\(fan)Mx").number()
-        guard minimum.isFinite, maximum.isFinite, minimum >= 0, maximum > minimum else {
+        guard minimum.isFinite, maximum.isFinite, minimum >= 0, maximum > 0 else {
             throw HelperControlError.invalidRange(fan)
         }
         return (minimum, maximum)
+    }
+
+    private func maximumTarget(for bounds: (minimum: Double, maximum: Double)) -> Double {
+        // Avoid the exact firmware-reported upper boundary. On some Apple
+        // Silicon controllers that value can be interpreted as an invalid
+        // transition and stop one fan when paired fans have different maxima.
+        max(0, bounds.maximum - 1)
     }
 
     private func writeRPM(_ rpm: Double, fan: Int) throws {

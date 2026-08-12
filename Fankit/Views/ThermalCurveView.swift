@@ -24,6 +24,14 @@ struct ThermalCurveView: View {
         )
     }
 
+    private var displayedFanIndex: Int? {
+        store.activeScheduleCurve.fanCurves == nil ? nil : store.fans.sorted { $0.index < $1.index }.first?.index
+    }
+
+    private var displayedProfile: ThermalCurveProfile {
+        store.activeScheduleCurve.displayProfile(for: displayedFanIndex)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -42,7 +50,11 @@ struct ThermalCurveView: View {
 
             Picker("Preset", selection: profileSelection) {
                 ForEach(store.selectedMode == .aiScheduling ? store.aiProfiles : store.curveProfiles.filter { !$0.isAIGenerated }) { profile in
-                    Text(profile.isBuiltIn ? profile.localizedName : "★ \(profile.name)").tag(profile.id)
+                    if let kind = profile.aiPresetKind {
+                        Text(verbatim: "\(kind.title) · \(profile.name)").tag(profile.id)
+                    } else {
+                        Text(profile.isBuiltIn ? profile.localizedName : "★ \(profile.name)").tag(profile.id)
+                    }
                 }
             }
 
@@ -50,10 +62,17 @@ struct ThermalCurveView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            if store.activeScheduleCurve.fanCurves != nil {
+                Label("This preset controls each fan independently.", systemImage: "slider.horizontal.3")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+            }
+
             CurveChart(
-                profile: store.activeScheduleCurve,
+                profile: displayedProfile,
                 currentTemperature: store.displayedCurveTemperature,
-                quietFanFraction: store.quietFanFraction,
+                quietFanFraction: store.quietFanFraction(for: displayedFanIndex),
+                quietRangeDescription: store.quietRangeDescription,
                 showCurrentTemperature: $showCurrentTemperature,
                 showRecommendedQuietRange: $showRecommendedQuietRange
             )
@@ -92,12 +111,18 @@ struct ThermalCurveView: View {
 
 struct CurveEditorView: View {
     let store: FanControlStore
+    let openQuietCalibration: () -> Void
     @State private var newPresetName = ""
+    @State private var selectedFanIndex: Int?
     @AppStorage("curveShowCurrentTemperature") private var showCurrentTemperature = true
     @AppStorage("curveShowRecommendedQuietRange") private var showRecommendedQuietRange = true
 
     private var profileSelection: Binding<String> {
         Binding(get: { store.activeCurveID }, set: store.selectCurve)
+    }
+
+    private var editingProfile: ThermalCurveProfile {
+        store.curveProfile(for: selectedFanIndex)
     }
 
     var body: some View {
@@ -108,6 +133,10 @@ struct CurveEditorView: View {
                         .font(.largeTitle.bold())
                     Text("Drag an existing point to shape the curve, or click empty space to add a point.")
                         .foregroundStyle(.secondary)
+                }
+
+                if !store.hasQuietCalibration {
+                    QuietCalibrationRecommendationView(openSettings: openQuietCalibration)
                 }
 
                 GroupBox {
@@ -124,15 +153,69 @@ struct CurveEditorView: View {
                                 .foregroundStyle(store.activeCurve.isBuiltIn ? Color.secondary : Color.blue)
                         }
 
+                        if store.fans.count > 1 {
+                            Picker("Curve to edit", selection: $selectedFanIndex) {
+                                Text("All Fans · Shared").tag(Int?.none)
+                                ForEach(store.fans.sorted { $0.index < $1.index }) { fan in
+                                    Text(verbatim: fan.name).tag(Optional(fan.index))
+                                }
+                            }
+                            .pickerStyle(.segmented)
+
+                            HStack {
+                                if let selectedFanIndex {
+                                    Label(
+                                        store.activeCurve.hasIndependentCurve(for: selectedFanIndex)
+                                            ? "This fan has an independent curve."
+                                            : "This fan currently follows the shared curve. Editing creates an independent curve.",
+                                        systemImage: store.activeCurve.hasIndependentCurve(for: selectedFanIndex)
+                                            ? "slider.horizontal.3"
+                                            : "link"
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    Spacer()
+                                    if store.activeCurve.hasIndependentCurve(for: selectedFanIndex) {
+                                        Button("Reset to Shared") {
+                                            store.resetIndependentCurve(for: selectedFanIndex)
+                                        }
+                                    }
+                                } else {
+                                    Label(
+                                        "The shared curve is the fallback for fans without an independent curve.",
+                                        systemImage: "link"
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+
                         CurveChart(
-                            profile: store.activeCurve,
+                            profile: editingProfile,
                             currentTemperature: store.displayedCurveTemperature,
-                            quietFanFraction: store.quietFanFraction,
+                            quietFanFraction: store.quietFanFraction(for: selectedFanIndex),
+                            quietRangeDescription: store.quietRangeDescription,
                             showCurrentTemperature: $showCurrentTemperature,
                             showRecommendedQuietRange: $showRecommendedQuietRange,
-                            onAddPoint: store.addCurvePoint,
-                            onMovePoint: store.dragCurvePoint,
-                            onFinishMovingPoint: store.finishDraggingCurvePoint
+                            onAddPoint: { temperature, fanFraction in
+                                store.addCurvePoint(
+                                    temperature: temperature,
+                                    fanFraction: fanFraction,
+                                    fanIndex: selectedFanIndex
+                                )
+                            },
+                            onMovePoint: { id, temperature, fanFraction in
+                                store.dragCurvePoint(
+                                    id: id,
+                                    temperature: temperature,
+                                    fanFraction: fanFraction,
+                                    fanIndex: selectedFanIndex
+                                )
+                            },
+                            onFinishMovingPoint: { id in
+                                store.finishDraggingCurvePoint(id: id, fanIndex: selectedFanIndex)
+                            }
                         )
                         .frame(height: 300)
 
@@ -190,13 +273,13 @@ struct CurveEditorView: View {
                 }
 
                 GroupBox("Precise Curve Points") {
-                    CurvePointEditor(store: store)
+                    CurvePointEditor(store: store, fanIndex: selectedFanIndex)
                         .padding(6)
                 }
             }
             .padding(24)
         }
-        .navigationTitle("Curve Editor")
+        .navigationTitle(L10n.string("Curve Editor"))
     }
 }
 
@@ -204,6 +287,7 @@ private struct CurveChart: View {
     let profile: ThermalCurveProfile
     let currentTemperature: Double?
     let quietFanFraction: Double?
+    let quietRangeDescription: String
     @Binding var showCurrentTemperature: Bool
     @Binding var showRecommendedQuietRange: Bool
     var onAddPoint: ((Double, Double) -> Void)?
@@ -269,7 +353,7 @@ private struct CurveChart: View {
                     .foregroundStyle(.green.opacity(0.85))
                     .lineStyle(.init(lineWidth: 1.5, dash: [6, 4]))
                     .annotation(position: .top, alignment: .trailing) {
-                        Label("Recommended Quiet · ≤ 3000 RPM", systemImage: "speaker.slash.fill")
+                        Label(quietRangeDescription, systemImage: "speaker.slash.fill")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.green)
                             .padding(.horizontal, 6)
@@ -429,26 +513,29 @@ private struct CurveMarkerOptionsMenu: View {
 
 private struct CurvePointEditor: View {
     let store: FanControlStore
+    let fanIndex: Int?
+
+    private var profile: ThermalCurveProfile { store.curveProfile(for: fanIndex) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("\(store.activeCurve.points.count) of 8 points")
+                Text("\(profile.points.count) of 8 points")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Add Point", systemImage: "plus") {
-                    store.addCurvePoint()
+                    store.addCurvePoint(fanIndex: fanIndex)
                 }
-                .disabled(store.activeCurve.points.count >= 8)
+                .disabled(profile.points.count >= 8)
             }
 
-            ForEach(store.activeCurve.normalizedPoints) { point in
+            ForEach(profile.normalizedPoints) { point in
                 HStack(spacing: 14) {
                     Stepper(
                         value: Binding(
                             get: { point.temperature },
-                            set: { store.updateCurvePoint(id: point.id, temperature: $0) }
+                            set: { store.updateCurvePoint(id: point.id, temperature: $0, fanIndex: fanIndex) }
                         ),
                         in: 35...100,
                         step: 1
@@ -461,7 +548,7 @@ private struct CurvePointEditor: View {
                     Slider(
                         value: Binding(
                             get: { point.fanFraction },
-                            set: { store.updateCurvePoint(id: point.id, fanFraction: $0) }
+                            set: { store.updateCurvePoint(id: point.id, fanFraction: $0, fanIndex: fanIndex) }
                         ),
                         in: 0...1,
                         step: 0.01
@@ -472,10 +559,10 @@ private struct CurvePointEditor: View {
                         .frame(width: 42, alignment: .trailing)
 
                     Button("Remove", systemImage: "minus.circle") {
-                        store.removeCurvePoint(id: point.id)
+                        store.removeCurvePoint(id: point.id, fanIndex: fanIndex)
                     }
                     .labelStyle(.iconOnly)
-                    .disabled(store.activeCurve.points.count <= 2)
+                    .disabled(profile.points.count <= 2)
                 }
             }
 

@@ -69,7 +69,7 @@ struct OverviewView: View {
             }
             .padding(24)
         }
-        .navigationTitle("Overview")
+        .navigationTitle(L10n.string("Overview"))
     }
 
     private var statusHeader: some View {

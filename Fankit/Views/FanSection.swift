@@ -105,7 +105,7 @@ private struct FanRow: View {
         }
         return L10n.format(
             "%d–%d RPM",
-            Int(fan.minimumRPM),
+            0,
             Int(fan.maximumRPM)
         )
     }

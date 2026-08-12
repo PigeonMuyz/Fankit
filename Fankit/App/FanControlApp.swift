@@ -21,9 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
-    func configureStatusItem(store: FanControlStore, openSettings: @escaping @MainActor () -> Void) {
+    func configureStatusItem(store: FanControlStore) {
         guard statusItemController == nil else { return }
-        statusItemController = StatusItemController(store: store, openSettings: openSettings)
+        statusItemController = StatusItemController(store: store)
     }
 
     private func updateDockPreference(activate: Bool = false) {
@@ -38,11 +38,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct FanControlApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store: FanControlStore
+    @State private var updateService: GitHubUpdateService
     @AppStorage(PreferenceKey.appLanguage) private var languageRaw = AppLanguage.system.rawValue
 
     init() {
         ApplicationPreferences.prepareDefaults()
         _store = State(initialValue: FanControlStore())
+        _updateService = State(initialValue: GitHubUpdateService())
     }
 
     private var language: AppLanguage {
@@ -51,12 +53,12 @@ struct FanControlApp: App {
 
     var body: some Scene {
         WindowGroup("Fankit", id: "main") {
-            ContentView(store: store)
+            ContentView(store: store, updateService: updateService)
                 .frame(minWidth: 720, minHeight: 560)
                 .environment(\.locale, language.locale)
                 .background {
                     StatusItemBootstrapView {
-                        appDelegate.configureStatusItem(store: store, openSettings: $0)
+                        appDelegate.configureStatusItem(store: store)
                         store.start()
                     }
                 }
@@ -64,23 +66,20 @@ struct FanControlApp: App {
         .defaultSize(width: 820, height: 640)
 
         Settings {
-            SettingsView(store: store)
+            SettingsView(store: store, updateService: updateService)
                 .environment(\.locale, language.locale)
         }
     }
 }
 
 private struct StatusItemBootstrapView: View {
-    @Environment(\.openSettings) private var openSettings
-    let configure: (@escaping @MainActor () -> Void) -> Void
+    let configure: () -> Void
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .task {
-                configure {
-                    openSettings()
-                }
+                configure()
             }
     }
 }

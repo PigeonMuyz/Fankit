@@ -1,15 +1,15 @@
-# Fankit 1.0.2：AI 调度设计
+# Fankit 1.0.3：AI 调度与本机静音校准
 
 ## 目标
 
-让用户利用一段真实的 System 调度运行数据，请自己信任的 AI 给出一条温度—风扇曲线；Fankit 只负责采集、生成引导词、验证 AI 返回值和执行经过安全约束的曲线。
+让用户利用一段真实的 System 调度运行数据和本机静音校准，请自己信任的 AI 一次给出静音优先、均衡、性能优先三条温度—风扇曲线；Fankit 只负责采集、生成引导词、验证 AI 返回值和执行曲线。
 
 核心原则：
 
 - Fankit 不内置 AI 服务，也不上传用户数据。
-- AI 只能返回曲线数据，不能返回代码、SMC key、shell 命令或任意 RPM 指令。
+- AI 只能返回三组百分比曲线数据，不能返回代码、SMC key、shell 命令或任意 RPM 指令。
 - 粘贴 AI 返回值后先解析、校验、预览，用户确认后才启用。
-- 记录和生成提示词期间始终保持 System 调度，不接管风扇。
+- 进入 AI 页面不会自动改变调度；只有用户明确开始记录后才切换到 System 调度。
 - AI 调度沿用现有的温度滤波、升降速限制、2°C 回差和 100°C 紧急最大风速保护。
 
 ## 用户流程
@@ -29,7 +29,13 @@
 
 推荐每 10 秒保存一个观测点。现有监控刷新仍可保持 2 秒，但不把每次刷新全部写入磁盘。一次采集最长 24 小时，达到上限自动结束；用户也可以随时点击「结束采集」。
 
-首次进入时允许用户选择「本次开始」或开启「启动 Fankit 时自动开始采集」。不建议未经确认在每次启动时静默产生 24 小时记录。
+首次进入时由用户明确点击「开始 System 观察」。不得因为打开 AI 页面就改变当前风扇模式。
+
+### 本机静音校准
+
+曲线编辑器和设置窗口均提供静音校准入口。用户可以让全部风扇以相同百分比一起运行，也可以选择单个风扇测试；单风扇测试时其他风扇保持各自硬件最低转速。用户在正常坐姿下调整到听不到的最高转速，确认后按当前风扇名称、索引和最小/最大转速组成的硬件指纹保存在本机。
+
+静音校准只作为 AI 的生成上下文，不在运行时限制 AI 曲线。AI 曲线本身只要求温度严格递增、且本级风扇需求不得低于上一级。
 
 ### 2. 查看并生成提示词
 
@@ -76,36 +82,78 @@
 
 粘贴、保存和预览都不会自动启用。helper 不可用、传感器失效、AI 曲线执行失败或温度达到紧急阈值时，统一恢复 System 或 Max 的现有安全路径。
 
-## AI 返回协议 v1
+每次保存新的 AI 结果都会用本次的静音、均衡、性能三套预设整体替换上一组 AI 预设，不保留重复的历史生成版本；手动自定义曲线不受影响。
+
+## AI 返回协议 v3
 
 提示词要求 AI 只返回一个 JSON 对象：
 
 ```json
 {
-  "format": "fankit-ai-schedule",
-  "version": 1,
-  "name": "Balanced sustained work",
-  "summary": "Earlier cooling during sustained CPU and GPU load.",
-  "points": [
-    { "temperature_c": 52, "fan_percent": 15 },
-    { "temperature_c": 64, "fan_percent": 30 },
-    { "temperature_c": 74, "fan_percent": 55 },
-    { "temperature_c": 84, "fan_percent": 82 },
-    { "temperature_c": 92, "fan_percent": 100 }
+  "format": "fankit-ai-presets",
+  "version": 3,
+  "schedules": [
+    {
+      "preset": "quiet",
+      "name": "Quiet first",
+      "summary": "Uses the calibrated quiet range when practical.",
+      "fan_curves": [
+        {
+          "fan_index": 0,
+          "fan_name": "Left",
+          "points": [
+            { "temperature_c": 55, "fan_percent": 12 },
+            { "temperature_c": 82, "fan_percent": 55 }
+          ]
+        }
+      ]
+    },
+    {
+      "preset": "balanced",
+      "name": "Balanced",
+      "summary": "Balances noise and sustained cooling.",
+      "fan_curves": [
+        {
+          "fan_index": 0,
+          "fan_name": "Left",
+          "points": [
+            { "temperature_c": 50, "fan_percent": 18 },
+            { "temperature_c": 78, "fan_percent": 65 }
+          ]
+        }
+      ]
+    },
+    {
+      "preset": "performance",
+      "name": "Performance first",
+      "summary": "Increases airflow earlier.",
+      "fan_curves": [
+        {
+          "fan_index": 0,
+          "fan_name": "Left",
+          "points": [
+            { "temperature_c": 44, "fan_percent": 30 },
+            { "temperature_c": 72, "fan_percent": 80 }
+          ]
+        }
+      ]
+    }
   ]
 }
 ```
 
-只接受以下字段：`format`、`version`、`name`、`summary`、`points`。执行层忽略 AI 返回的其它字段，不支持 `command`、`script`、`smc_key`、`rpm`、`hysteresis` 或自定义执行逻辑。
+每个 `fan_curves` 必须按本机实际风扇提供一个 `fan_index`，多风扇设备可为不同风扇生成不同的点集。执行层不支持 `command`、`script`、`smc_key`、`rpm`、`hysteresis` 或自定义执行逻辑。
 
 校验规则：
 
-- `format` 必须为 `fankit-ai-schedule`，`version` 必须为 `1`；
+- `format` 必须为 `fankit-ai-presets`；v3 使用逐风扇曲线，仍兼容共享曲线 v2 和旧版单曲线 v1 导入；
+- 必须各包含一个 `quiet`、`balanced` 和 `performance`；
+- v3 的每个预设必须且只能包含本机每个实际风扇一次；
 - 名称限制为 1–48 个字符，摘要限制长度；
 - 点数为 2–8 个；温度范围 35–100°C；
 - 风扇百分比范围 0–100%；
 - 温度必须严格递增，距离过近的点拒绝或在预览中明确合并；
-- 风扇需求随温度升高不得下降；
+- 每条曲线只要求风扇需求随温度升高不得下降，不额外施加静音上限、最低散热曲线或强制高温锚点；
 - 百分比转换为现有 `ThermalCurveProfile` 的 `fanFraction`，最终 RPM 仍根据硬件回报的最小/最大范围计算；
 - 运行时继续使用现有的升速 900 RPM、降速 350 RPM 限制、2°C 回差和 100°C 紧急最大风速。
 

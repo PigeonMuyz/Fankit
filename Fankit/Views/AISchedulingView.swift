@@ -4,22 +4,29 @@ import SwiftUI
 
 struct AISchedulingView: View {
     let store: FanControlStore
+    let openQuietCalibration: () -> Void
 
     @State private var aiResponse = ""
     @State private var promptWasCopied = false
+    @State private var selectedPreviewID = ""
+    @State private var selectedPreviewFanIndex: Int?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 intro
 
+                if !store.hasQuietCalibration {
+                    QuietCalibrationRecommendationView(openSettings: openQuietCalibration)
+                }
+
                 if store.isLoadingAIState {
                     ProgressView()
                         .frame(maxWidth: .infinity, minHeight: 180)
                 } else if let session = store.aiCaptureSession {
                     recordingView(session)
-                } else if let preview = store.aiPreviewProfile {
-                    previewView(preview)
+                } else if !store.aiPreviewProfiles.isEmpty {
+                    previewView(store.aiPreviewProfiles)
                 } else if let session = store.latestAICaptureSession {
                     reviewView(session)
                 } else {
@@ -32,10 +39,7 @@ struct AISchedulingView: View {
             }
             .padding(24)
         }
-        .navigationTitle("AI Scheduling")
-        .onAppear {
-            store.beginAICaptureIfNeeded()
-        }
+        .navigationTitle(L10n.string("AI Scheduling"))
     }
 
     private var intro: some View {
@@ -330,13 +334,19 @@ struct AISchedulingView: View {
         }
     }
 
-    private func previewView(_ profile: ThermalCurveProfile) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
+    private func previewView(_ profiles: [ThermalCurveProfile]) -> some View {
+        let profile = profiles.first(where: { $0.id == selectedPreviewID })
+            ?? profiles.first(where: { $0.aiPresetKind == .balanced })
+            ?? profiles[0]
+        let previewFanIndex = selectedPreviewFanIndex
+            ?? profile.fanCurves?.sorted { $0.fanIndex < $1.fanIndex }.first?.fanIndex
+        let displayedProfile = profile.displayProfile(for: previewFanIndex)
+        return VStack(alignment: .leading, spacing: 18) {
             GroupBox {
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
                         Label(
-                            L10n.string("AI Schedule Preview"),
+                            L10n.string("AI Preset Preview"),
                             systemImage: "sparkles"
                         )
                         .font(.title3.weight(.semibold))
@@ -346,15 +356,46 @@ struct AISchedulingView: View {
                             .foregroundStyle(.orange)
                     }
 
+                    Picker("AI preset", selection: Binding(
+                        get: { profile.id },
+                        set: { selectedPreviewID = $0 }
+                    )) {
+                        ForEach(profiles) { candidate in
+                            Text(verbatim: candidate.aiPresetKind?.title ?? candidate.name)
+                                .tag(candidate.id)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if let kind = profile.aiPresetKind {
+                        Label(kind.title, systemImage: presetSymbol(kind))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.purple)
+                    }
                     Text(verbatim: profile.name)
                         .font(.headline)
                     Text(verbatim: profile.summary)
                         .foregroundStyle(.secondary)
 
-                    AIScheduleCurveChart(profile: profile)
+                    if let fanCurves = profile.fanCurves, !fanCurves.isEmpty {
+                        Picker("Fan curve", selection: Binding(
+                            get: { previewFanIndex },
+                            set: { selectedPreviewFanIndex = $0 }
+                        )) {
+                            ForEach(fanCurves.sorted { $0.fanIndex < $1.fanIndex }) { curve in
+                                Text(verbatim: curve.fanName).tag(Optional(curve.fanIndex))
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        Label("AI generated an independent curve for every fan.", systemImage: "slider.horizontal.3")
+                            .font(.caption)
+                            .foregroundStyle(.purple)
+                    }
+
+                    AIScheduleCurveChart(profile: displayedProfile)
                         .frame(height: 220)
 
-                    ForEach(profile.normalizedPoints) { point in
+                    ForEach(displayedProfile.normalizedPoints) { point in
                         HStack {
                             Text(verbatim: "\(Int(point.temperature.rounded()))°C")
                                 .monospacedDigit()
@@ -367,8 +408,15 @@ struct AISchedulingView: View {
                     }
 
                     Label(
-                        L10n.string("Fankit will enforce hardware limits, ramp limits, hysteresis, and emergency cooling."),
+                        L10n.string("Each AI curve only needs to stay monotonic. Fankit still enforces hardware limits, ramp limits, hysteresis, and 100°C emergency cooling."),
                         systemImage: "checkmark.shield"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                    Label(
+                        L10n.string("Saving these presets replaces the previous AI-generated preset set."),
+                        systemImage: "arrow.triangle.2.circlepath"
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -383,18 +431,26 @@ struct AISchedulingView: View {
                         Button {
                             store.saveAIPreview()
                         } label: {
-                            Text(verbatim: L10n.string("Save for Later"))
+                            Text(verbatim: L10n.string("Save All for Later"))
                         }
                         Button {
                             store.saveAndEnableAIPreview()
                         } label: {
-                            Text(verbatim: L10n.string("Save and Enable AI Scheduling"))
+                            Text(verbatim: L10n.string("Save All and Enable Balanced"))
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(!store.canControlFans)
                     }
                 }
             }
+        }
+    }
+
+    private func presetSymbol(_ kind: AIPresetKind) -> String {
+        switch kind {
+        case .quiet: "speaker.slash.fill"
+        case .balanced: "scale.3d"
+        case .performance: "bolt.fill"
         }
     }
 

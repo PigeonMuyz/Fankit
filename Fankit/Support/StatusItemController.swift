@@ -7,13 +7,11 @@ final class StatusItemController: NSObject {
     private let statusItem: NSStatusItem
     private let labelView = StatusItemLabelView()
     private let popover = NSPopover()
-    private let openSettings: @MainActor () -> Void
     private var observers: [NSObjectProtocol] = []
     private var currentLanguageRaw = ""
 
-    init(store: FanControlStore, openSettings: @escaping @MainActor () -> Void) {
+    init(store: FanControlStore) {
         self.store = store
-        self.openSettings = openSettings
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
 
@@ -148,9 +146,8 @@ final class StatusItemController: NSObject {
     }
 
     private func showSettings() {
-        popover.performClose(nil)
-        openSettings()
-        NSApp.activate(ignoringOtherApps: true)
+        store.requestSettings()
+        showMainWindow()
     }
 
     private func showAIWorkflow() {

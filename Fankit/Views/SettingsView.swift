@@ -1,22 +1,103 @@
 import ServiceManagement
 import SwiftUI
 
+enum SettingsTab: String, CaseIterable, Identifiable {
+    case general
+    case menuBar
+    case quiet
+    case updates
+    case safety
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .general: "General"
+        case .menuBar: "Menu Bar"
+        case .quiet: "Quiet"
+        case .updates: "Updates"
+        case .safety: "Safety"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .general: "gearshape"
+        case .menuBar: "menubar.rectangle"
+        case .quiet: "speaker.slash.fill"
+        case .updates: "arrow.triangle.2.circlepath"
+        case .safety: "checkmark.shield"
+        }
+    }
+}
+
 struct SettingsView: View {
     let store: FanControlStore
+    let updateService: GitHubUpdateService
+    @State private var selection: SettingsTab = .general
 
     var body: some View {
-        TabView {
+        SettingsTabs(
+            store: store,
+            updateService: updateService,
+            selection: $selection
+        )
+        .frame(width: 620, height: 500)
+        .scenePadding()
+    }
+}
+
+struct SettingsPageView: View {
+    let store: FanControlStore
+    let updateService: GitHubUpdateService
+    @Binding var selection: SettingsTab
+
+    var body: some View {
+        SettingsTabs(
+            store: store,
+            updateService: updateService,
+            selection: $selection
+        )
+        .padding(24)
+        .navigationTitle(L10n.string("Settings"))
+    }
+}
+
+private struct SettingsTabs: View {
+    let store: FanControlStore
+    let updateService: GitHubUpdateService
+    @Binding var selection: SettingsTab
+
+    var body: some View {
+        TabView(selection: $selection) {
             GeneralSettingsView()
-                .tabItem { Label("General", systemImage: "gearshape") }
+                .tabItem { tabLabel(.general) }
+                .tag(SettingsTab.general)
 
             MenuBarSettingsView(store: store)
-                .tabItem { Label("Menu Bar", systemImage: "menubar.rectangle") }
+                .tabItem { tabLabel(.menuBar) }
+                .tag(SettingsTab.menuBar)
+
+            QuietCalibrationSettingsView(store: store)
+                .tabItem { tabLabel(.quiet) }
+                .tag(SettingsTab.quiet)
+
+            UpdateSettingsView(updateService: updateService)
+                .tabItem { tabLabel(.updates) }
+                .tag(SettingsTab.updates)
 
             SafetySettingsView(store: store)
-                .tabItem { Label("Safety", systemImage: "checkmark.shield") }
+                .tabItem { tabLabel(.safety) }
+                .tag(SettingsTab.safety)
         }
-        .frame(width: 560, height: 430)
-        .scenePadding()
+    }
+
+    private func tabLabel(_ tab: SettingsTab) -> some View {
+        Label {
+            Text(verbatim: L10n.string(tab.title))
+        } icon: {
+            Image(systemName: tab.systemImage)
+        }
     }
 }
 
@@ -195,6 +276,109 @@ private struct MenuBarStatusPreview: NSViewRepresentable {
         context: Context
     ) -> CGSize? {
         nsView.intrinsicContentSize
+    }
+}
+
+private struct UpdateSettingsView: View {
+    let updateService: GitHubUpdateService
+    @AppStorage(PreferenceKey.automaticallyCheckForUpdates) private var automaticallyChecks = true
+    @AppStorage(PreferenceKey.checkForUpdatesAtEveryLaunch) private var checksAtEveryLaunch = false
+
+    var body: some View {
+        Form {
+            Section("Update Preferences") {
+                LabeledContent(
+                    "Current Version",
+                    value: updateService.currentVersion
+                )
+                Toggle("Automatically check for updates", isOn: $automaticallyChecks)
+                Toggle("Check for updates every time Fankit starts", isOn: $checksAtEveryLaunch)
+                    .disabled(!automaticallyChecks)
+                Text("Automatic checks use a 12-hour interval unless every-launch checking is enabled.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("GitHub Releases") {
+                HStack {
+                    if updateService.isChecking {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Checking for Updates…")
+                            .foregroundStyle(.secondary)
+                    } else if let release = updateService.latestRelease,
+                              updateService.isUpdateAvailable
+                    {
+                        Label {
+                            Text(verbatim: L10n.format("Version %@ is available.", release.version))
+                        } icon: {
+                            Image(systemName: "arrow.down.circle.fill")
+                        }
+                        .foregroundStyle(.blue)
+                    } else if updateService.latestRelease != nil {
+                        Label(
+                            "Fankit is up to date.",
+                            systemImage: "checkmark.circle.fill"
+                        )
+                        .foregroundStyle(.green)
+                    } else {
+                        Text("No update check has completed yet.")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Check Now") {
+                        Task { await updateService.checkForUpdates() }
+                    }
+                    .disabled(updateService.isChecking || updateService.isDownloading)
+                }
+
+                if let release = updateService.latestRelease,
+                   updateService.isUpdateAvailable
+                {
+                    if let body = release.body, !body.isEmpty {
+                        Text(verbatim: body)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(5)
+                            .textSelection(.enabled)
+                    }
+
+                    HStack {
+                        Button("View Release Notes") {
+                            updateService.openReleasePage()
+                        }
+                        Spacer()
+                        Button {
+                            Task { await updateService.downloadAndOpenUpdate() }
+                        } label: {
+                            if updateService.isDownloading {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Text("Download and Open Update")
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(updateService.isDownloading)
+                    }
+                }
+
+                if let errorMessage = updateService.errorMessage {
+                    Label {
+                        Text(verbatim: errorMessage)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onChange(of: automaticallyChecks) { _, enabled in
+            guard enabled else { return }
+            Task { await updateService.checkForUpdates() }
+        }
     }
 }
 

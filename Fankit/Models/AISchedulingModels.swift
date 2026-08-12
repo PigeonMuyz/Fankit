@@ -1,5 +1,29 @@
 import Foundation
 
+enum AIPresetKind: String, Codable, CaseIterable, Identifiable, Sendable {
+    case quiet
+    case balanced
+    case performance
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .quiet: L10n.string("Quiet First")
+        case .balanced: L10n.string("Balanced")
+        case .performance: L10n.string("Performance First")
+        }
+    }
+
+    var sortOrder: Int {
+        switch self {
+        case .quiet: 0
+        case .balanced: 1
+        case .performance: 2
+        }
+    }
+}
+
 enum AICaptureSessionState: String, Codable, Sendable {
     case recording
     case completed
@@ -109,11 +133,60 @@ struct AIImportedCurvePoint: Codable, Hashable, Sendable {
 }
 
 struct AIImportedSchedule: Codable, Hashable, Sendable {
+    let preset: AIPresetKind?
+    let name: String
+    let summary: String
+    let points: [AIImportedCurvePoint]?
+    let fanCurves: [AIImportedFanCurve]?
+
+    enum CodingKeys: String, CodingKey {
+        case preset, name, summary, points
+        case fanCurves = "fan_curves"
+    }
+
+    init(
+        preset: AIPresetKind?,
+        name: String,
+        summary: String,
+        points: [AIImportedCurvePoint]? = nil,
+        fanCurves: [AIImportedFanCurve]? = nil
+    ) {
+        self.preset = preset
+        self.name = name
+        self.summary = summary
+        self.points = points
+        self.fanCurves = fanCurves
+    }
+}
+
+struct AIImportedFanCurve: Codable, Hashable, Sendable {
+    let fanIndex: Int
+    let fanName: String?
+    let points: [AIImportedCurvePoint]
+
+    enum CodingKeys: String, CodingKey {
+        case fanIndex = "fan_index"
+        case fanName = "fan_name"
+        case points
+    }
+}
+
+struct AIImportedPresetCollection: Codable, Hashable, Sendable {
+    let format: String
+    let version: Int
+    let schedules: [AIImportedSchedule]
+}
+
+struct AIImportedLegacySchedule: Codable, Hashable, Sendable {
     let format: String
     let version: Int
     let name: String
     let summary: String
     let points: [AIImportedCurvePoint]
+
+    var schedule: AIImportedSchedule {
+        AIImportedSchedule(preset: nil, name: name, summary: summary, points: points)
+    }
 }
 
 enum AIScheduleValidationError: LocalizedError, Sendable {
@@ -122,6 +195,8 @@ enum AIScheduleValidationError: LocalizedError, Sendable {
     case unsupportedCommandField(String)
     case unsupportedFormat
     case unsupportedVersion
+    case invalidPresetCollection
+    case invalidFanCurveCollection
     case invalidName
     case invalidSummary
     case invalidPointCount
@@ -142,7 +217,11 @@ enum AIScheduleValidationError: LocalizedError, Sendable {
         case .unsupportedFormat:
             "The JSON format must be fankit-ai-schedule."
         case .unsupportedVersion:
-            "This Fankit build only supports AI schedule version 1."
+            "This Fankit build supports AI preset collection versions 3 and 2, plus legacy schedule version 1."
+        case .invalidPresetCollection:
+            "The AI response must contain one quiet, balanced, and performance preset."
+        case .invalidFanCurveCollection:
+            "Each version 3 preset must contain exactly one curve for every fan on this Mac."
         case .invalidName:
             "The schedule name must contain 1–48 characters."
         case .invalidSummary:
@@ -165,4 +244,10 @@ enum AIScheduleValidationError: LocalizedError, Sendable {
 
 extension ThermalCurveProfile {
     var isAIGenerated: Bool { id.hasPrefix("ai.") }
+
+    var aiPresetKind: AIPresetKind? {
+        AIPresetKind.allCases.first {
+            id.hasPrefix("ai.\($0.rawValue).") || id == "ai.preview.\($0.rawValue)"
+        }
+    }
 }

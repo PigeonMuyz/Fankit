@@ -12,12 +12,37 @@ struct ThermalCurvePoint: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+struct FanSpecificCurve: Codable, Hashable, Identifiable, Sendable {
+    var fanIndex: Int
+    var fanName: String
+    var points: [ThermalCurvePoint]
+
+    var id: Int { fanIndex }
+}
+
 struct ThermalCurveProfile: Codable, Hashable, Identifiable, Sendable {
     var id: String
     var name: String
     var summary: String
     var points: [ThermalCurvePoint]
     var isBuiltIn: Bool
+    var fanCurves: [FanSpecificCurve]?
+
+    init(
+        id: String,
+        name: String,
+        summary: String,
+        points: [ThermalCurvePoint],
+        isBuiltIn: Bool,
+        fanCurves: [FanSpecificCurve]? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.summary = summary
+        self.points = points
+        self.isBuiltIn = isBuiltIn
+        self.fanCurves = fanCurves
+    }
 
     var localizedName: String {
         isBuiltIn ? L10n.string(name) : name
@@ -28,11 +53,54 @@ struct ThermalCurveProfile: Codable, Hashable, Identifiable, Sendable {
     }
 
     var activationTemperature: Double {
-        normalizedPoints.first?.temperature ?? 50
+        allCurvePoints.compactMap { $0.first?.temperature }.min() ?? 50
     }
 
     var normalizedPoints: [ThermalCurvePoint] {
-        points
+        Self.normalized(points)
+    }
+
+    var allCurvePoints: [[ThermalCurvePoint]] {
+        [normalizedPoints] + (fanCurves ?? []).map { Self.normalized($0.points) }
+    }
+
+    func normalizedPoints(for fanIndex: Int?) -> [ThermalCurvePoint] {
+        guard let fanIndex,
+              let fanCurve = fanCurves?.first(where: { $0.fanIndex == fanIndex })
+        else { return normalizedPoints }
+        return Self.normalized(fanCurve.points)
+    }
+
+    func activationTemperature(for fanIndex: Int?) -> Double {
+        normalizedPoints(for: fanIndex).first?.temperature ?? 50
+    }
+
+    func hasIndependentCurve(for fanIndex: Int) -> Bool {
+        fanCurves?.contains(where: { $0.fanIndex == fanIndex }) == true
+    }
+
+    func displayProfile(for fanIndex: Int?) -> ThermalCurveProfile {
+        guard let fanIndex else { return self }
+        var result = self
+        result.points = normalizedPoints(for: fanIndex)
+        result.fanCurves = nil
+        return result
+    }
+
+    func quietHeadroomPoints(calibratedFraction: Double) -> [ThermalCurvePoint] {
+        let safeFraction = min(max(calibratedFraction, 0), 1)
+        return normalizedPoints.enumerated().map { index, point in
+            let utilization = index == 0 ? 0.75 : 1.0
+            return ThermalCurvePoint(
+                id: point.id,
+                temperature: point.temperature,
+                fanFraction: max(point.fanFraction, safeFraction * utilization)
+            )
+        }
+    }
+
+    private static func normalized(_ source: [ThermalCurvePoint]) -> [ThermalCurvePoint] {
+        source
             .map {
                 ThermalCurvePoint(
                     id: $0.id,
@@ -44,8 +112,8 @@ struct ThermalCurveProfile: Codable, Hashable, Identifiable, Sendable {
     }
 
     /// Below the first point, `nil` means macOS keeps full control.
-    func fanFraction(at temperature: Double) -> Double? {
-        let points = normalizedPoints
+    func fanFraction(at temperature: Double, fanIndex: Int? = nil) -> Double? {
+        let points = normalizedPoints(for: fanIndex)
         guard let first = points.first, temperature >= first.temperature else { return nil }
         guard let last = points.last else { return nil }
         if temperature >= last.temperature { return last.fanFraction }
@@ -61,12 +129,19 @@ struct ThermalCurveProfile: Codable, Hashable, Identifiable, Sendable {
 
     static func targetRPM(
         for fanFraction: Double,
-        minimumRPM: Double,
         maximumRPM: Double
     ) -> Double {
         let fraction = min(max(fanFraction, 0), 1)
-        guard fraction > 0 else { return 0 }
-        return minimumRPM + ((maximumRPM - minimumRPM) * fraction)
+        guard fraction > 0, maximumRPM.isFinite, maximumRPM > 0 else { return 0 }
+        let requested = maximumRPM * fraction
+        return min(requested, maximumTargetRPM(maximumRPM: maximumRPM))
+    }
+
+    static func maximumTargetRPM(maximumRPM: Double) -> Double {
+        // Some Apple Silicon fan controllers treat the exact F%dMx boundary as
+        // an invalid transition. One RPM is below every supported target-key
+        // resolution while remaining indistinguishable from the reported max.
+        max(0, maximumRPM - 1)
     }
 
     func validated() -> ThermalCurveProfile {
@@ -90,6 +165,20 @@ struct ThermalCurveProfile: Codable, Hashable, Identifiable, Sendable {
             previous = unique[index].fanFraction
         }
         result.points = Array(unique.prefix(8))
+        result.fanCurves = result.fanCurves?.map { curve in
+            let validatedCurve = ThermalCurveProfile(
+                id: "fan.\(curve.fanIndex)",
+                name: curve.fanName,
+                summary: "",
+                points: curve.points,
+                isBuiltIn: false
+            ).validated()
+            return FanSpecificCurve(
+                fanIndex: curve.fanIndex,
+                fanName: curve.fanName,
+                points: validatedCurve.points
+            )
+        }
         return result
     }
 
@@ -167,13 +256,13 @@ extension ThermalCurveProfile {
     static let quiet = ThermalCurveProfile(
         id: "builtin.quiet",
         name: "Quiet",
-        summary: "Stay in System mode longer, then ramp gently.",
+        summary: "Use steady low-noise airflow early, then ramp firmly under load.",
         points: [
-            .init(temperature: 58, fanFraction: 0.12),
-            .init(temperature: 68, fanFraction: 0.25),
-            .init(temperature: 78, fanFraction: 0.48),
-            .init(temperature: 88, fanFraction: 0.78),
-            .init(temperature: 96, fanFraction: 1.00),
+            .init(temperature: 48, fanFraction: 0.22),
+            .init(temperature: 60, fanFraction: 0.38),
+            .init(temperature: 70, fanFraction: 0.60),
+            .init(temperature: 80, fanFraction: 0.84),
+            .init(temperature: 88, fanFraction: 1.00),
         ],
         isBuiltIn: true
     )
@@ -181,46 +270,32 @@ extension ThermalCurveProfile {
     static let balanced = ThermalCurveProfile(
         id: "builtin.balanced",
         name: "Balanced",
-        summary: "A smooth default for everyday workloads.",
+        summary: "Start cooling sooner for everyday work and sustained loads.",
         points: [
-            .init(temperature: 52, fanFraction: 0.15),
-            .init(temperature: 64, fanFraction: 0.30),
-            .init(temperature: 74, fanFraction: 0.55),
-            .init(temperature: 84, fanFraction: 0.82),
-            .init(temperature: 92, fanFraction: 1.00),
+            .init(temperature: 44, fanFraction: 0.28),
+            .init(temperature: 56, fanFraction: 0.48),
+            .init(temperature: 66, fanFraction: 0.70),
+            .init(temperature: 76, fanFraction: 0.90),
+            .init(temperature: 84, fanFraction: 1.00),
         ],
         isBuiltIn: true
     )
 
-    static let cool = ThermalCurveProfile(
-        id: "builtin.cool",
-        name: "Cool",
-        summary: "Earlier airflow for lower sustained temperatures.",
+    static let performance = ThermalCurveProfile(
+        id: "builtin.performance",
+        name: "Performance",
+        summary: "Prioritize sustained performance with early, decisive cooling.",
         points: [
-            .init(temperature: 45, fanFraction: 0.18),
-            .init(temperature: 58, fanFraction: 0.40),
-            .init(temperature: 68, fanFraction: 0.65),
-            .init(temperature: 78, fanFraction: 0.88),
-            .init(temperature: 86, fanFraction: 1.00),
+            .init(temperature: 40, fanFraction: 0.38),
+            .init(temperature: 50, fanFraction: 0.60),
+            .init(temperature: 60, fanFraction: 0.80),
+            .init(temperature: 70, fanFraction: 0.95),
+            .init(temperature: 78, fanFraction: 1.00),
         ],
         isBuiltIn: true
     )
 
-    static let sustained = ThermalCurveProfile(
-        id: "builtin.sustained",
-        name: "Sustained Work",
-        summary: "Aggressive cooling for builds, rendering, and long loads.",
-        points: [
-            .init(temperature: 42, fanFraction: 0.25),
-            .init(temperature: 54, fanFraction: 0.48),
-            .init(temperature: 64, fanFraction: 0.72),
-            .init(temperature: 74, fanFraction: 0.92),
-            .init(temperature: 82, fanFraction: 1.00),
-        ],
-        isBuiltIn: true
-    )
-
-    static let presets = [quiet, balanced, cool, sustained]
+    static let presets = [quiet, balanced, performance]
 
     static var defaultCustom: ThermalCurveProfile {
         var profile = balanced

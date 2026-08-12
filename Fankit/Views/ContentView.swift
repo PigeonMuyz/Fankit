@@ -5,6 +5,7 @@ private enum SidebarDestination: String, Identifiable {
     case temperatures
     case curves
     case aiScheduling
+    case settings
 
     var id: Self { self }
 
@@ -14,6 +15,7 @@ private enum SidebarDestination: String, Identifiable {
         case .temperatures: "Temperatures"
         case .curves: "Curve Editor"
         case .aiScheduling: "AI Scheduling"
+        case .settings: "Settings"
         }
     }
 
@@ -23,13 +25,16 @@ private enum SidebarDestination: String, Identifiable {
         case .temperatures: "thermometer.medium"
         case .curves: "chart.xyaxis.line"
         case .aiScheduling: "sparkles"
+        case .settings: "gearshape"
         }
     }
 }
 
 struct ContentView: View {
     let store: FanControlStore
+    let updateService: GitHubUpdateService
     @State private var selection: SidebarDestination? = .overview
+    @State private var settingsSelection: SettingsTab = .general
 
     var body: some View {
         NavigationSplitView {
@@ -43,9 +48,16 @@ struct ContentView: View {
                     SidebarRow(destination: .curves)
                     SidebarRow(destination: .aiScheduling)
                 }
+
+                Section("Application") {
+                    SidebarRow(
+                        destination: .settings,
+                        showsUpdateBadge: updateService.isUpdateAvailable
+                    )
+                }
             }
             .listStyle(.sidebar)
-            .navigationTitle("Fankit")
+            .navigationTitle(L10n.string("Fankit"))
         } detail: {
             detail
                 .toolbar {
@@ -60,6 +72,12 @@ struct ContentView: View {
         .onChange(of: store.aiWorkflowRequestID) { _, _ in
             selection = .aiScheduling
         }
+        .onChange(of: store.settingsWorkflowRequestID) { _, _ in
+            selection = .settings
+        }
+        .task {
+            await updateService.checkForUpdatesAtLaunch()
+        }
     }
 
     @ViewBuilder
@@ -72,25 +90,50 @@ struct ContentView: View {
                 TemperatureSections(store: store, compact: false)
                     .padding(24)
             }
-            .navigationTitle("Temperatures")
+            .navigationTitle(L10n.string("Temperatures"))
         case .curves:
-            CurveEditorView(store: store)
+            CurveEditorView(store: store, openQuietCalibration: openQuietCalibration)
         case .aiScheduling:
-            AISchedulingView(store: store)
+            AISchedulingView(store: store, openQuietCalibration: openQuietCalibration)
+        case .settings:
+            SettingsPageView(
+                store: store,
+                updateService: updateService,
+                selection: $settingsSelection
+            )
         }
+    }
+
+    private func openQuietCalibration() {
+        settingsSelection = .quiet
+        selection = .settings
     }
 }
 
 private struct SidebarRow: View {
     let destination: SidebarDestination
+    var showsUpdateBadge = false
 
     var body: some View {
-        Label(LocalizedStringKey(destination.title), systemImage: destination.systemImage)
+        HStack {
+            Label {
+                Text(verbatim: L10n.string(destination.title))
+            } icon: {
+                Image(systemName: destination.systemImage)
+            }
+            Spacer()
+            if showsUpdateBadge {
+                Circle()
+                    .fill(.blue)
+                    .frame(width: 7, height: 7)
+                    .accessibilityLabel(Text(verbatim: L10n.string("Update Available")))
+            }
+        }
         .tag(destination)
     }
 }
 
 #Preview {
-    ContentView(store: FanControlStore())
+    ContentView(store: FanControlStore(), updateService: GitHubUpdateService())
         .frame(width: 900, height: 720)
 }

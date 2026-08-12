@@ -10,7 +10,7 @@ DERIVED_DATA="${DERIVED_DATA:-$ROOT_DIR/.derivedData/release}"
 DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist}"
 STAGING_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fankit-dmg.XXXXXX")"
 RW_IMAGE="$STAGING_DIR/Fankit-rw.dmg"
-MOUNT_DIR=""
+MOUNT_DIR="$STAGING_DIR/mount"
 DMG_PATH="$DIST_DIR/Fankit-$VERSION.dmg"
 CHECKSUM_PATH="$DMG_PATH.sha256"
 
@@ -30,7 +30,7 @@ SIGNING_SETTINGS=(
 )
 
 cleanup() {
-  if [[ -n "$MOUNT_DIR" ]]; then
+  if mount | grep -Fq " on $MOUNT_DIR "; then
     hdiutil detach "$MOUNT_DIR" -force >/dev/null 2>&1 || true
   fi
   rm -rf "$STAGING_DIR"
@@ -78,12 +78,8 @@ hdiutil create \
   -volname "Fankit" \
   -ov "$RW_IMAGE" >/dev/null
 
-MOUNT_OUTPUT="$(hdiutil attach -nobrowse -noautoopen "$RW_IMAGE")"
-MOUNT_DIR="$(printf '%s\n' "$MOUNT_OUTPUT" | awk '$NF ~ /^\/Volumes\// { print $NF; exit }')"
-if [[ -z "$MOUNT_DIR" ]]; then
-  echo "Unable to locate the mounted Fankit volume." >&2
-  exit 1
-fi
+mkdir -p "$MOUNT_DIR"
+hdiutil attach -nobrowse -noautoopen -mountpoint "$MOUNT_DIR" "$RW_IMAGE" >/dev/null
 
 ditto "$BUILT_APP" "$MOUNT_DIR/Fankit.app"
 ln -s /Applications "$MOUNT_DIR/Applications"
@@ -119,7 +115,6 @@ fi
 
 sync
 hdiutil detach "$MOUNT_DIR" >/dev/null
-MOUNT_DIR=""
 hdiutil convert "$RW_IMAGE" -format UDZO -imagekey zlib-level=9 -ov -o "$DMG_PATH" >/dev/null
 shasum -a 256 "$DMG_PATH" > "$CHECKSUM_PATH"
 hdiutil verify "$DMG_PATH" >/dev/null

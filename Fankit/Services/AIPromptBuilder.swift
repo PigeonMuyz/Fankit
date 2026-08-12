@@ -35,7 +35,7 @@ enum AIPromptBuilder {
                 minimum: values.min() ?? 0,
                 average: values.reduce(0, +) / Double(values.count),
                 maximum: values.max() ?? 0,
-                hardwareRange: "\(Int(first.minimumRPM.rounded()))–\(Int(first.maximumRPM.rounded())) RPM"
+                hardwareRange: "0–\(Int(first.maximumRPM.rounded())) RPM"
             )
         }
 
@@ -50,9 +50,35 @@ enum AIPromptBuilder {
         )
     }
 
-    static func prompt(for session: AICaptureSession) -> String {
+    static func prompt(
+        for session: AICaptureSession,
+        quietProfile: QuietCalibrationProfile? = nil,
+        currentFans: [FanSnapshot] = []
+    ) -> String {
         let summary = summary(for: session)
         let buckets = compressedBuckets(for: session)
+        let quietLines = quietCalibrationLines(profile: quietProfile, fans: currentFans)
+        let livePromptFans = currentFans
+            .sorted { $0.index < $1.index }
+            .map { (index: $0.index, name: $0.name) }
+        let observedPromptFans = session.samples
+            .sorted { $0.timestamp > $1.timestamp }
+            .first(where: { !$0.fans.isEmpty })?.fans
+            .sorted { $0.index < $1.index }
+            .map { (index: $0.index, name: $0.name) } ?? []
+        let promptFans = livePromptFans.isEmpty ? observedPromptFans : livePromptFans
+        let fanCurveExample = (promptFans.isEmpty ? [(index: 0, name: "Fan")] : promptFans).map { fan in
+            """
+                  {
+                    "fan_index": \(fan.index),
+                    "fan_name": \(jsonString(fan.name)),
+                    "points": [
+                      { "temperature_c": 50, "fan_percent": 18 },
+                      { "temperature_c": 78, "fan_percent": 60 }
+                    ]
+                  }
+            """
+        }.joined(separator: ",\n")
         let temperatureLines = summary.temperatures.map {
             "- \($0.title): min \(number($0.minimum))°C, average \(number($0.average))°C, P95 \(number($0.p95))°C, max \(number($0.maximum))°C"
         }.joined(separator: "\n")
@@ -71,22 +97,41 @@ enum AIPromptBuilder {
         }.joined(separator: "\n")
 
         return """
-        You are helping design a safe temperature-based fan curve for Fankit on macOS.
+        You are helping design three temperature-based fan presets for Fankit on macOS.
 
-        Return ONLY one JSON object matching the exact fankit-ai-schedule version 1 format below. Do not return Markdown, explanations, code, shell commands, SMC keys, raw RPM targets, or any executable instructions.
+        Return ONLY one JSON object matching the exact fankit-ai-presets version 3 format below. Do not return Markdown, explanations, code, shell commands, SMC keys, raw RPM targets, or any executable instructions.
 
-        The curve must be monotonic: fan_percent must never decrease as temperature_c rises. Use 2–8 points, temperatures from 35 to 100°C, and fan_percent from 0 to 100. Recommend a practical curve based on sustained cooling, noise, and the observed System behavior. Fankit will enforce its own hardware limits, ramp limits, hysteresis, and emergency protection after import.
+        Generate exactly one quiet, one balanced, and one performance preset. Every preset must contain exactly one fan_curves entry for every listed fan_index; independently choose the points for each physical fan. Within each fan curve, fan_percent must never decrease as temperature_c rises. Use 2–8 points per fan, temperatures from 35 to 100°C, and fan_percent from 0 to 100. Do not impose a shared minimum curve, maximum curve, or required high-temperature anchor across the three presets. Each fan_percent maps independently from 0 RPM to that fan's live, device-reported maximum. The quiet preset should make the best use of the local calibration according to its stated combined or individual meaning; balanced should trade noise for sustained cooling; performance should increase cooling earlier. Fankit will enforce only each fan's device-reported maximum, ramp limits, hysteresis, monotonic demand, and 100°C emergency protection after import.
 
         Required output shape:
         {
-          "format": "fankit-ai-schedule",
-          "version": 1,
-          "name": "Short schedule name",
-          "summary": "One-sentence explanation",
-          "points": [
-            { "temperature_c": 52, "fan_percent": 15 },
-            { "temperature_c": 74, "fan_percent": 55 },
-            { "temperature_c": 92, "fan_percent": 100 }
+          "format": "fankit-ai-presets",
+          "version": 3,
+          "schedules": [
+            {
+              "preset": "quiet",
+              "name": "Quiet first",
+              "summary": "One-sentence explanation",
+              "fan_curves": [
+        \(fanCurveExample)
+              ]
+            },
+            {
+              "preset": "balanced",
+              "name": "Balanced",
+              "summary": "One-sentence explanation",
+              "fan_curves": [
+        \(fanCurveExample)
+              ]
+            },
+            {
+              "preset": "performance",
+              "name": "Performance first",
+              "summary": "One-sentence explanation",
+              "fan_curves": [
+        \(fanCurveExample)
+              ]
+            }
           ]
         }
 
@@ -102,9 +147,33 @@ enum AIPromptBuilder {
         Fan statistics:
         \(fanLines.isEmpty ? "- No valid fan data" : fanLines)
 
+        Local quiet calibration:
+        \(quietLines)
+
         Compressed five-minute time series:
         \(bucketLines.isEmpty ? "- No valid time-series data" : bucketLines)
         """
+    }
+
+    private static func quietCalibrationLines(
+        profile: QuietCalibrationProfile?,
+        fans: [FanSnapshot]
+    ) -> String {
+        guard let profile, profile.isCompatible(with: fans) else {
+            return "- No compatible local quiet calibration is available."
+        }
+
+        let methodLine = profile.resolvedMethod == .combined
+            ? "- Calibration meaning: all fans were audible-tested together; these targets describe one combined quiet level."
+            : "- Calibration meaning: fans were tested one at a time; each limit applies only to that fan alone and does not prove that running multiple fans together is inaudible."
+        let lines = fans.sorted { $0.index < $1.index }.compactMap { fan -> String? in
+            guard let limit = profile.limit(for: fan.index) else { return nil }
+            let percent = fan.fraction(forRPM: limit.quietRPM) * 100
+            return "- \(fan.name): highest inaudible target \(number(limit.quietRPM, digits: 0)) RPM (\(number(percent, digits: 0))%)"
+        }
+        return lines.isEmpty
+            ? "- No compatible local quiet calibration is available."
+            : ([methodLine] + lines).joined(separator: "\n")
     }
 
     private struct CompressedBucket {
@@ -154,5 +223,12 @@ enum AIPromptBuilder {
 
     private static func number(_ value: Double, digits: Int = 1) -> String {
         String(format: "%.*f", digits, value)
+    }
+
+    private static func jsonString(_ value: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: [value]),
+              let encoded = String(data: data, encoding: .utf8)
+        else { return "\"Fan\"" }
+        return String(encoded.dropFirst().dropLast())
     }
 }

@@ -72,8 +72,10 @@ def compiler_keys(derived_data: pathlib.Path) -> set[str]:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             continue
-        source = data.get("source", "")
-        if "/Fankit/Fankit/" not in source:
+        source = pathlib.Path(data.get("source", ""))
+        try:
+            source.resolve().relative_to((REPO / "Fankit").resolve())
+        except (ValueError, OSError):
             continue
         for table in data.get("tables", {}).values():
             keys.update(item["key"] for item in table)

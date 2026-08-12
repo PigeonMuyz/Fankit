@@ -79,8 +79,8 @@ struct FanSnapshot: Identifiable, Equatable {
     }
 
     func fraction(forRPM rpm: Double) -> Double {
-        guard maximumRPM > minimumRPM else { return 0 }
-        return min(max((rpm - minimumRPM) / (maximumRPM - minimumRPM), 0), 1)
+        guard maximumRPM > 0 else { return 0 }
+        return min(max(rpm / maximumRPM, 0), 1)
     }
 }
 

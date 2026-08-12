@@ -54,6 +54,7 @@ verify_ai_scheduling() {
     "$ROOT_DIR/Fankit/Models/FanControlModels.swift" \
     "$ROOT_DIR/Fankit/Models/ThermalCurve.swift" \
     "$ROOT_DIR/Fankit/Models/AISchedulingModels.swift" \
+    "$ROOT_DIR/Fankit/Models/QuietCalibrationModels.swift" \
     "$ROOT_DIR/Fankit/Services/AIPromptBuilder.swift" \
     "$ROOT_DIR/Fankit/Services/AIScheduleParser.swift" \
     "$ROOT_DIR/script/ai_verify/main.swift" \

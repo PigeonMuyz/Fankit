@@ -24,9 +24,19 @@ final class FanControlStore {
     private(set) var latestAICaptureSession: AICaptureSession?
     private(set) var aiCaptureError: String?
     private(set) var isLoadingAIState = true
-    private(set) var aiPreviewProfile: ThermalCurveProfile?
+    private(set) var aiPreviewProfiles: [ThermalCurveProfile] = []
     private(set) var aiPreviewError: String?
+    private(set) var quietCalibrationProfile: QuietCalibrationProfile?
+    private(set) var isStartingQuietCalibration = false
+    private(set) var isQuietCalibrationActive = false
+    private(set) var quietCalibrationScope: QuietCalibrationScope = .allFans
+    private(set) var quietCalibrationMethod: QuietCalibrationMethod?
+    private(set) var quietCalibrationFanPosition = 0
+    private(set) var quietCalibrationFanFraction = 0.25
+    private(set) var quietCalibrationDraftRPMs: [Int: Double] = [:]
+    private(set) var quietCalibrationMessage: String?
     var aiWorkflowRequestID = 0
+    var settingsWorkflowRequestID = 0
     var selectedMode: FanControlMode = .system
 
     @ObservationIgnored private var monitor: HardwareMonitor?
@@ -38,6 +48,10 @@ final class FanControlStore {
     @ObservationIgnored private var previousCurveTargets: [Int: Double] = [:]
     @ObservationIgnored private var lastCaptureSampleAt: Date?
     @ObservationIgnored private var isAppendingCaptureSample = false
+    @ObservationIgnored private var quietCalibrationOriginalMode: FanControlMode?
+    @ObservationIgnored private var quietCalibrationStartTask: Task<Void, Never>?
+    @ObservationIgnored private var quietCalibrationApplyTask: Task<Void, Never>?
+    @ObservationIgnored private var isStoppingQuietCalibration = false
     @ObservationIgnored private let defaults = UserDefaults.standard
     @ObservationIgnored private let startupMode: FanControlMode
     @ObservationIgnored private var didRestoreStartupMode = false
@@ -63,13 +77,22 @@ final class FanControlStore {
         let profiles = ThermalCurveProfile.presets + customProfiles
         let savedID = UserDefaults.standard.string(forKey: "activeThermalCurveID")
         let savedAICurveID = UserDefaults.standard.string(forKey: "activeAICurveID")
+        if let data = UserDefaults.standard.data(forKey: PreferenceKey.quietCalibrationProfile) {
+            quietCalibrationProfile = try? JSONDecoder().decode(QuietCalibrationProfile.self, from: data)
+        }
         curveProfiles = profiles
         activeCurveID = profiles.contains(where: { $0.id == savedID }) ? savedID! : ThermalCurveProfile.balanced.id
         activeAICurveID = profiles.first(where: { $0.id == savedAICurveID && $0.isAIGenerated })?.id
     }
 
     var canControlFans: Bool { helperStatus == .ready }
-    var aiProfiles: [ThermalCurveProfile] { curveProfiles.filter(\.isAIGenerated) }
+    var aiProfiles: [ThermalCurveProfile] {
+        curveProfiles.filter(\.isAIGenerated).sorted {
+            let lhs = $0.aiPresetKind?.sortOrder ?? Int.max
+            let rhs = $1.aiPresetKind?.sortOrder ?? Int.max
+            return lhs == rhs ? $0.localizedName < $1.localizedName : lhs < rhs
+        }
+    }
     var hasAISchedule: Bool { activeAICurve != nil }
     var isCurveMode: Bool { selectedMode == .autoBoost || selectedMode == .aiScheduling }
     var hottestTemperature: Double? { temperatures.map(\.celsius).max() }
@@ -91,7 +114,57 @@ final class FanControlStore {
     }
     var quietFanFraction: Double? {
         guard !fans.isEmpty else { return nil }
-        return fans.map { $0.fraction(forRPM: 3_000) }.min()
+        let profile = compatibleQuietCalibrationProfile
+        return fans.map { fan in
+            let rpm = profile?.limit(for: fan.index)?.quietRPM ?? 3_000
+            return fan.fraction(forRPM: rpm)
+        }.min()
+    }
+    func quietFanFraction(for fanIndex: Int?) -> Double? {
+        guard let fanIndex,
+              let fan = fans.first(where: { $0.index == fanIndex })
+        else { return quietFanFraction }
+        let rpm = compatibleQuietCalibrationProfile?.limit(for: fan.index)?.quietRPM ?? 3_000
+        return fan.fraction(forRPM: rpm)
+    }
+    var compatibleQuietCalibrationProfile: QuietCalibrationProfile? {
+        guard let quietCalibrationProfile,
+              quietCalibrationProfile.isCompatible(with: fans)
+        else { return nil }
+        return quietCalibrationProfile
+    }
+    var hasQuietCalibration: Bool { compatibleQuietCalibrationProfile != nil }
+    var quietCalibrationScopeIsCaptured: Bool {
+        switch quietCalibrationScope {
+        case .allFans:
+            !fans.isEmpty && fans.allSatisfy { quietCalibrationDraftRPMs[$0.index] != nil }
+        case .fan(let index):
+            quietCalibrationDraftRPMs[index] != nil
+        }
+    }
+    var quietCalibrationCurrentFan: FanSnapshot? {
+        guard quietCalibrationMethod == .individual else { return nil }
+        let orderedFans = fans.sorted { $0.index < $1.index }
+        guard orderedFans.indices.contains(quietCalibrationFanPosition) else { return nil }
+        return orderedFans[quietCalibrationFanPosition]
+    }
+    var quietCalibrationStep: Int { min(quietCalibrationFanPosition + 1, max(fans.count, 1)) }
+    var quietCalibrationIsLastFan: Bool { quietCalibrationStep >= fans.count }
+    var quietCalibrationTargetRPMs: [Int: Double] {
+        calibrationTargets(scope: quietCalibrationScope, fraction: quietCalibrationFanFraction)
+    }
+    var quietRangeDescription: String {
+        guard let profile = compatibleQuietCalibrationProfile else {
+            return L10n.string("Generic quiet reference · ≤ 3000 RPM")
+        }
+        if profile.resolvedMethod == .individual {
+            return L10n.string("Individual fan quiet limits")
+        }
+        let values = fans.compactMap { fan -> String? in
+            guard let rpm = profile.limit(for: fan.index)?.quietRPM else { return nil }
+            return "\(fan.name) \(Int(rpm.rounded())) RPM"
+        }
+        return L10n.format("Combined quiet level · %@", values.joined(separator: " · "))
     }
     var activeCurve: ThermalCurveProfile {
         curveProfiles.first(where: { $0.id == activeCurveID }) ?? .balanced
@@ -103,7 +176,43 @@ final class FanControlStore {
     }
 
     var activeScheduleCurve: ThermalCurveProfile {
-        selectedMode == .aiScheduling ? (activeAICurve ?? .balanced) : activeCurve
+        let profile = selectedMode == .aiScheduling ? (activeAICurve ?? .balanced) : activeCurve
+        return quietCalibrationAdjustedCurve(profile)
+    }
+
+    private func quietCalibrationAdjustedCurve(
+        _ profile: ThermalCurveProfile
+    ) -> ThermalCurveProfile {
+        guard profile.id == ThermalCurveProfile.quiet.id,
+              let calibration = compatibleQuietCalibrationProfile,
+              !fans.isEmpty
+        else { return profile }
+
+        let semanticScale: Double
+        if calibration.resolvedMethod == .combined || fans.count == 1 {
+            semanticScale = 1
+        } else {
+            // Individual audible limits cannot be treated as a combined acoustic
+            // result. Reduce each limit as more independently calibrated fans run.
+            semanticScale = max(0.65, 1 / sqrt(Double(fans.count)))
+        }
+
+        var adjusted = profile
+        adjusted.summary = L10n.string(
+            "Uses this Mac's calibrated quiet headroom for stronger low-noise cooling."
+        )
+        adjusted.fanCurves = fans.sorted { $0.index < $1.index }.compactMap { fan in
+            guard let limit = calibration.limit(for: fan.index) else { return nil }
+            let calibratedFraction = fan.fraction(forRPM: limit.quietRPM) * semanticScale
+            return FanSpecificCurve(
+                fanIndex: fan.index,
+                fanName: fan.name,
+                points: profile.quietHeadroomPoints(
+                    calibratedFraction: calibratedFraction
+                )
+            )
+        }
+        return adjusted.validated()
     }
 
     func start() {
@@ -144,10 +253,15 @@ final class FanControlStore {
         if isCurveMode {
             Task { await evaluateCurveIfNeeded() }
         }
+        if isQuietCalibrationActive, (hottestTemperature ?? 0) >= 100 {
+            quietCalibrationMessage = L10n.string("Calibration stopped because the temperature reached 100°C.")
+            stopQuietCalibration(save: false, emergencyCooling: true)
+        }
         recordAICaptureSampleIfNeeded()
     }
 
     func selectMode(_ mode: FanControlMode) {
+        guard !isQuietCalibrationActive, !isStartingQuietCalibration, !isStoppingQuietCalibration else { return }
         if mode == .aiScheduling && !hasAISchedule {
             requestAIWorkflow()
             return
@@ -158,6 +272,10 @@ final class FanControlStore {
 
     func requestAIWorkflow() {
         aiWorkflowRequestID &+= 1
+    }
+
+    func requestSettings() {
+        settingsWorkflowRequestID &+= 1
     }
 
     func refreshHelperStatus() async {
@@ -213,15 +331,13 @@ final class FanControlStore {
     }
 
     var aiPrompt: String? {
-        latestAICaptureSession.map(AIPromptBuilder.prompt(for:))
-    }
-
-    func beginAICaptureIfNeeded() {
-        guard !isLoadingAIState,
-              aiCaptureSession == nil,
-              latestAICaptureSession == nil
-        else { return }
-        startAICapture()
+        latestAICaptureSession.map {
+            AIPromptBuilder.prompt(
+                for: $0,
+                quietProfile: compatibleQuietCalibrationProfile,
+                currentFans: fans
+            )
+        }
     }
 
     func startAICapture() {
@@ -261,35 +377,54 @@ final class FanControlStore {
 
     func discardLatestAICapture() {
         latestAICaptureSession = nil
-        aiPreviewProfile = nil
+        aiPreviewProfiles = []
         aiPreviewError = nil
         aiCaptureError = nil
     }
 
     func previewAIResponse(_ text: String) {
         do {
-            aiPreviewProfile = try AIScheduleParser.parse(text)
+            aiPreviewProfiles = try AIScheduleParser.parseProfiles(text, fans: fans)
             aiPreviewError = nil
         } catch {
-            aiPreviewProfile = nil
+            aiPreviewProfiles = []
             aiPreviewError = error.localizedDescription
         }
     }
 
     func clearAIPreview() {
-        aiPreviewProfile = nil
+        aiPreviewProfiles = []
         aiPreviewError = nil
     }
 
     @discardableResult
     func saveAIPreview() -> Bool {
-        guard var profile = aiPreviewProfile else { return false }
-        profile.id = "ai.\(UUID().uuidString)"
-        profile.isBuiltIn = false
-        curveProfiles.append(profile)
-        activeAICurveID = profile.id
+        guard !aiPreviewProfiles.isEmpty else { return false }
+        let savedProfiles = aiPreviewProfiles.map { preview -> ThermalCurveProfile in
+            var profile = preview
+            let kind = preview.aiPresetKind?.rawValue ?? "custom"
+            profile.id = "ai.\(kind).\(UUID().uuidString)"
+            profile.isBuiltIn = false
+            profile.points = profile.points.map {
+                ThermalCurvePoint(temperature: $0.temperature, fanFraction: $0.fanFraction)
+            }
+            profile.fanCurves = profile.fanCurves?.map { curve in
+                FanSpecificCurve(
+                    fanIndex: curve.fanIndex,
+                    fanName: curve.fanName,
+                    points: curve.points.map {
+                        ThermalCurvePoint(temperature: $0.temperature, fanFraction: $0.fanFraction)
+                    }
+                )
+            }
+            return profile
+        }
+        curveProfiles.removeAll(where: \.isAIGenerated)
+        curveProfiles.append(contentsOf: savedProfiles)
+        activeAICurveID = savedProfiles.first(where: { $0.aiPresetKind == .balanced })?.id
+            ?? savedProfiles.first?.id
         persistCustomCurves()
-        aiPreviewProfile = nil
+        aiPreviewProfiles = []
         return true
     }
 
@@ -309,6 +444,243 @@ final class FanControlStore {
             Task { _ = await applyMode(.system, persist: true) }
         }
         persistCustomCurves()
+    }
+
+    func beginQuietCalibration(method requestedMethod: QuietCalibrationMethod? = nil) {
+        guard !isQuietCalibrationActive, !isStartingQuietCalibration, !isStoppingQuietCalibration else { return }
+        guard canControlFans, !fans.isEmpty else {
+            quietCalibrationMessage = L10n.string("Enable fan control before starting quiet calibration.")
+            return
+        }
+
+        isStartingQuietCalibration = true
+        quietCalibrationMessage = nil
+        quietCalibrationOriginalMode = selectedMode
+        quietCalibrationStartTask = Task { @MainActor in
+            defer { quietCalibrationStartTask = nil }
+            let restoredSystem = await applyMode(.system, persist: false)
+            guard isStartingQuietCalibration else { return }
+            guard restoredSystem else {
+                isStartingQuietCalibration = false
+                quietCalibrationOriginalMode = nil
+                quietCalibrationMessage = L10n.string("Fankit could not enter System mode for calibration.")
+                return
+            }
+
+            let method: QuietCalibrationMethod = fans.count == 1 ? .individual : (requestedMethod ?? .combined)
+            quietCalibrationMethod = method
+            quietCalibrationFanPosition = 0
+            let existingProfile = compatibleQuietCalibrationProfile
+            quietCalibrationDraftRPMs = existingProfile?.resolvedMethod == method
+                ? Dictionary(uniqueKeysWithValues: (existingProfile?.fanLimits ?? []).map { ($0.fanIndex, $0.quietRPM) })
+                : [:]
+            quietCalibrationScope = method == .combined
+                ? .allFans
+                : .fan(fans.sorted { $0.index < $1.index }[0].index)
+            quietCalibrationFanFraction = calibrationFraction(for: quietCalibrationScope)
+            isQuietCalibrationActive = true
+            isStartingQuietCalibration = false
+            await applyQuietCalibrationTargets()
+        }
+    }
+
+    func updateQuietCalibrationFanFraction(_ fraction: Double) {
+        guard isQuietCalibrationActive else { return }
+        quietCalibrationFanFraction = min(max(fraction, 0), 1)
+        switch quietCalibrationScope {
+        case .allFans:
+            for fan in fans { quietCalibrationDraftRPMs.removeValue(forKey: fan.index) }
+        case .fan(let index):
+            quietCalibrationDraftRPMs.removeValue(forKey: index)
+        }
+        scheduleQuietCalibrationTargetUpdate()
+    }
+
+    func captureQuietCalibrationLevel() {
+        guard isQuietCalibrationActive else { return }
+        let targets = calibrationTargets(
+            scope: quietCalibrationScope,
+            fraction: quietCalibrationFanFraction
+        )
+        switch quietCalibrationScope {
+        case .allFans:
+            quietCalibrationDraftRPMs.merge(targets) { _, new in new }
+            quietCalibrationMessage = L10n.string("Recorded the combined quiet level for all fans.")
+        case .fan(let index):
+            guard let target = targets[index] else { return }
+            quietCalibrationDraftRPMs[index] = target
+            let name = fans.first(where: { $0.index == index })?.name ?? L10n.string("Fan")
+            quietCalibrationMessage = L10n.format("Recorded the quiet level for %@.", name)
+        }
+    }
+
+    @discardableResult
+    func captureAndAdvanceQuietCalibration() -> Bool {
+        guard isQuietCalibrationActive else { return false }
+        captureQuietCalibrationLevel()
+        if quietCalibrationMethod == .individual, !quietCalibrationIsLastFan {
+            quietCalibrationFanPosition += 1
+            guard let fan = quietCalibrationCurrentFan else { return false }
+            quietCalibrationScope = .fan(fan.index)
+            quietCalibrationFanFraction = calibrationFraction(for: quietCalibrationScope)
+            quietCalibrationMessage = L10n.format(
+                "Saved %@. Now calibrate %@.",
+                fans.sorted { $0.index < $1.index }[quietCalibrationFanPosition - 1].name,
+                fan.name
+            )
+            scheduleQuietCalibrationTargetUpdate()
+            return false
+        }
+        completeQuietCalibration()
+        return true
+    }
+
+    func completeQuietCalibration() {
+        guard isQuietCalibrationActive,
+              let method = quietCalibrationMethod,
+              quietCalibrationDraftRPMs.count == fans.count
+        else { return }
+        let limits = fans.compactMap { fan -> QuietFanLimit? in
+            guard let quietRPM = quietCalibrationDraftRPMs[fan.index] else { return nil }
+            return QuietFanLimit(
+                fanIndex: fan.index,
+                fanName: fan.name,
+                quietRPM: min(
+                    max(quietRPM, 0),
+                    ThermalCurveProfile.maximumTargetRPM(
+                        maximumRPM: fan.maximumRPM
+                    )
+                ),
+                minimumRPM: fan.minimumRPM,
+                maximumRPM: fan.maximumRPM
+            )
+        }
+        quietCalibrationProfile = QuietCalibrationProfile(
+            hardwareFingerprint: QuietCalibrationProfile.hardwareFingerprint(for: fans),
+            fanLimits: limits,
+            method: method
+        )
+        if let quietCalibrationProfile,
+           let data = try? JSONEncoder().encode(quietCalibrationProfile)
+        {
+            defaults.set(data, forKey: PreferenceKey.quietCalibrationProfile)
+        }
+        quietCalibrationMessage = L10n.string("Saved the quiet calibration for this Mac.")
+        stopQuietCalibration(save: true)
+    }
+
+    func cancelQuietCalibration() {
+        guard isQuietCalibrationActive || isStartingQuietCalibration else { return }
+        stopQuietCalibration(save: false)
+    }
+
+    func resetQuietCalibration() {
+        guard !isQuietCalibrationActive, !isStartingQuietCalibration else { return }
+        quietCalibrationProfile = nil
+        defaults.removeObject(forKey: PreferenceKey.quietCalibrationProfile)
+        quietCalibrationMessage = L10n.string("Removed this Mac's quiet calibration.")
+    }
+
+    private func calibrationFraction(for scope: QuietCalibrationScope) -> Double {
+        let profile = compatibleQuietCalibrationProfile
+        switch scope {
+        case .allFans:
+            return fans.map { fan in
+                let rpm = quietCalibrationDraftRPMs[fan.index]
+                    ?? profile?.limit(for: fan.index)?.quietRPM
+                    ?? 3_000
+                return fan.fraction(forRPM: rpm)
+            }.min() ?? 0.25
+        case .fan(let index):
+            guard let fan = fans.first(where: { $0.index == index }) else { return 0.25 }
+            let rpm = quietCalibrationDraftRPMs[index]
+                ?? profile?.limit(for: index)?.quietRPM
+                ?? 3_000
+            return fan.fraction(forRPM: rpm)
+        }
+    }
+
+    private func calibrationTargets(
+        scope: QuietCalibrationScope,
+        fraction: Double
+    ) -> [Int: Double] {
+        Dictionary(uniqueKeysWithValues: fans.map { fan in
+            let target: Double
+            switch scope {
+            case .allFans:
+                target = ThermalCurveProfile.targetRPM(
+                    for: fraction,
+                    maximumRPM: fan.maximumRPM
+                )
+            case .fan(let selectedIndex):
+                target = fan.index == selectedIndex
+                    ? ThermalCurveProfile.targetRPM(
+                        for: fraction,
+                        maximumRPM: fan.maximumRPM
+                    )
+                    : 0
+            }
+            let maximumTarget = ThermalCurveProfile.maximumTargetRPM(
+                maximumRPM: fan.maximumRPM
+            )
+            return (fan.index, min(max(target, 0), maximumTarget))
+        })
+    }
+
+    private func scheduleQuietCalibrationTargetUpdate() {
+        quietCalibrationApplyTask?.cancel()
+        quietCalibrationApplyTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            await self?.applyQuietCalibrationTargets()
+        }
+    }
+
+    private func applyQuietCalibrationTargets() async {
+        guard isQuietCalibrationActive else { return }
+        let targets = quietCalibrationTargetRPMs
+        do {
+            for fan in fans {
+                guard isQuietCalibrationActive, !Task.isCancelled else { return }
+                guard let target = targets[fan.index] else { continue }
+                try await fanControl.setTargetRPM(target, fan: fan.index)
+            }
+        } catch {
+            quietCalibrationMessage = error.localizedDescription
+            stopQuietCalibration(save: false)
+        }
+    }
+
+    private func stopQuietCalibration(save: Bool, emergencyCooling: Bool = false) {
+        guard !isStoppingQuietCalibration else { return }
+        isStoppingQuietCalibration = true
+        quietCalibrationStartTask?.cancel()
+        quietCalibrationApplyTask?.cancel()
+        quietCalibrationApplyTask = nil
+        let originalMode = quietCalibrationOriginalMode ?? .system
+        isStartingQuietCalibration = false
+        isQuietCalibrationActive = false
+        quietCalibrationMethod = nil
+        quietCalibrationFanPosition = 0
+        quietCalibrationOriginalMode = nil
+        if !save {
+            quietCalibrationDraftRPMs = [:]
+        }
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            if emergencyCooling {
+                do {
+                    try await fanControl.apply(.maximum)
+                    selectedMode = .maximum
+                } catch {
+                    controlMessage = error.localizedDescription
+                }
+            } else {
+                _ = await applyMode(originalMode, persist: false)
+            }
+            isStoppingQuietCalibration = false
+        }
     }
 
     private func restoreAIState() async {
@@ -363,39 +735,57 @@ final class FanControlStore {
         persistCustomCurves()
     }
 
-    func updateCurvePoint(id: UUID, temperature: Double? = nil, fanFraction: Double? = nil) {
-        let editableID = ensureEditableCurve()
-        guard let profileIndex = curveProfiles.firstIndex(where: { $0.id == editableID }),
-              let pointIndex = curveProfiles[profileIndex].points.firstIndex(where: { $0.id == id })
-        else { return }
+    func curveProfile(for fanIndex: Int?) -> ThermalCurveProfile {
+        activeCurve.displayProfile(for: fanIndex)
+    }
 
-        if let temperature { curveProfiles[profileIndex].points[pointIndex].temperature = temperature }
-        if let fanFraction { curveProfiles[profileIndex].points[pointIndex].fanFraction = fanFraction }
-        curveProfiles[profileIndex] = curveProfiles[profileIndex].validated()
+    func updateCurvePoint(
+        id: UUID,
+        temperature: Double? = nil,
+        fanFraction: Double? = nil,
+        fanIndex: Int? = nil
+    ) {
+        mutateEditableCurve(fanIndex: fanIndex) { profile in
+            guard let pointIndex = profile.points.firstIndex(where: { $0.id == id }) else { return }
+            if let temperature { profile.points[pointIndex].temperature = temperature }
+            if let fanFraction { profile.points[pointIndex].fanFraction = fanFraction }
+            profile = profile.validated()
+        }
         persistCustomCurves()
     }
 
-    func addCurvePoint() {
-        let editableID = ensureEditableCurve()
-        guard let index = curveProfiles.firstIndex(where: { $0.id == editableID }) else { return }
-        let points = curveProfiles[index].normalizedPoints
+    func addCurvePoint(fanIndex: Int? = nil) {
+        let points = curveProfile(for: fanIndex).normalizedPoints
         guard points.count < 8 else { return }
         let last = points.last ?? .init(temperature: 80, fanFraction: 0.8)
-        curveProfiles[index].points.append(.init(
-            temperature: min(last.temperature + 5, 100),
-            fanFraction: min(last.fanFraction + 0.1, 1)
-        ))
-        curveProfiles[index] = curveProfiles[index].validated()
+        mutateEditableCurve(fanIndex: fanIndex) { profile in
+            profile.points.append(.init(
+                temperature: min(last.temperature + 5, 100),
+                fanFraction: min(last.fanFraction + 0.1, 1)
+            ))
+            profile = profile.validated()
+        }
         curveEditorMessage = L10n.string("Added a new point. Drag the fine controls or click the chart again.")
         persistCustomCurves()
     }
 
-    func removeCurvePoint(id: UUID) {
+    func removeCurvePoint(id: UUID, fanIndex: Int? = nil) {
+        guard curveProfile(for: fanIndex).points.count > 2 else { return }
+        mutateEditableCurve(fanIndex: fanIndex) { profile in
+            profile.points.removeAll { $0.id == id }
+        }
+        persistCustomCurves()
+    }
+
+    func resetIndependentCurve(for fanIndex: Int) {
         let editableID = ensureEditableCurve()
-        guard let index = curveProfiles.firstIndex(where: { $0.id == editableID }),
-              curveProfiles[index].points.count > 2
+        guard let profileIndex = curveProfiles.firstIndex(where: { $0.id == editableID })
         else { return }
-        curveProfiles[index].points.removeAll { $0.id == id }
+        curveProfiles[profileIndex].fanCurves?.removeAll { $0.fanIndex == fanIndex }
+        if curveProfiles[profileIndex].fanCurves?.isEmpty == true {
+            curveProfiles[profileIndex].fanCurves = nil
+        }
+        curveEditorMessage = L10n.string("This fan now follows the shared curve.")
         persistCustomCurves()
     }
 
@@ -410,6 +800,15 @@ final class FanControlStore {
         copy.isBuiltIn = false
         copy.points = copy.points.map {
             ThermalCurvePoint(temperature: $0.temperature, fanFraction: $0.fanFraction)
+        }
+        copy.fanCurves = copy.fanCurves?.map { curve in
+            FanSpecificCurve(
+                fanIndex: curve.fanIndex,
+                fanName: curve.fanName,
+                points: curve.points.map {
+                    ThermalCurvePoint(temperature: $0.temperature, fanFraction: $0.fanFraction)
+                }
+            )
         }
         curveProfiles.append(copy)
         activeCurveID = copy.id
@@ -432,10 +831,12 @@ final class FanControlStore {
         persistCustomCurves()
     }
 
-    func coarseAdjustCurve(temperature: Double, fanFraction: Double) {
-        let editableID = ensureEditableCurve()
-        guard let index = curveProfiles.firstIndex(where: { $0.id == editableID }) else { return }
-        switch curveProfiles[index].coarseAdjust(temperature: temperature, fanFraction: fanFraction) {
+    func coarseAdjustCurve(temperature: Double, fanFraction: Double, fanIndex: Int? = nil) {
+        var adjustment = CurveAdjustment.unchanged
+        mutateEditableCurve(fanIndex: fanIndex) { profile in
+            adjustment = profile.coarseAdjust(temperature: temperature, fanFraction: fanFraction)
+        }
+        switch adjustment {
         case .added(let temperature, let fanFraction):
             curveEditorMessage = L10n.format(
                 "Added %d°C at %d%%.",
@@ -454,17 +855,16 @@ final class FanControlStore {
         persistCustomCurves()
     }
 
-    func addCurvePoint(temperature: Double, fanFraction: Double) {
-        let editableID = ensureEditableCurve()
-        guard let index = curveProfiles.firstIndex(where: { $0.id == editableID }) else { return }
-        guard curveProfiles[index].points.count < 8 else {
+    func addCurvePoint(temperature: Double, fanFraction: Double, fanIndex: Int? = nil) {
+        let currentProfile = curveProfile(for: fanIndex)
+        guard currentProfile.points.count < 8 else {
             curveEditorMessage = L10n.string("A curve can contain up to 8 points.")
             return
         }
 
         let temperature = min(max(temperature.rounded(), 35), 100)
         let fanFraction = min(max((fanFraction * 100).rounded() / 100, 0), 1)
-        guard curveProfiles[index].points.allSatisfy({ abs($0.temperature - temperature) >= 1 }) else {
+        guard currentProfile.points.allSatisfy({ abs($0.temperature - temperature) >= 1 }) else {
             curveEditorMessage = L10n.format(
                 "Drag the existing point at %d°C instead.",
                 Int(temperature)
@@ -472,11 +872,13 @@ final class FanControlStore {
             return
         }
 
-        curveProfiles[index].points.append(.init(
-            temperature: temperature,
-            fanFraction: fanFraction
-        ))
-        curveProfiles[index] = curveProfiles[index].validated()
+        mutateEditableCurve(fanIndex: fanIndex) { profile in
+            profile.points.append(.init(
+                temperature: temperature,
+                fanFraction: fanFraction
+            ))
+            profile = profile.validated()
+        }
         curveEditorMessage = L10n.format(
             "Added %d°C at %d%%.",
             Int(temperature),
@@ -485,19 +887,20 @@ final class FanControlStore {
         persistCustomCurves()
     }
 
-    func dragCurvePoint(id: UUID, temperature: Double, fanFraction: Double) {
-        let editableID = ensureEditableCurve()
-        guard let profileIndex = curveProfiles.firstIndex(where: { $0.id == editableID }) else { return }
-        curveProfiles[profileIndex].movePoint(
-            id: id,
-            temperature: temperature,
-            fanFraction: fanFraction
-        )
+    func dragCurvePoint(
+        id: UUID,
+        temperature: Double,
+        fanFraction: Double,
+        fanIndex: Int? = nil
+    ) {
+        mutateEditableCurve(fanIndex: fanIndex) { profile in
+            profile.movePoint(id: id, temperature: temperature, fanFraction: fanFraction)
+        }
         curveEditorMessage = nil
     }
 
-    func finishDraggingCurvePoint(id: UUID) {
-        guard let point = activeCurve.points.first(where: { $0.id == id }) else { return }
+    func finishDraggingCurvePoint(id: UUID, fanIndex: Int? = nil) {
+        guard let point = curveProfile(for: fanIndex).points.first(where: { $0.id == id }) else { return }
         curveEditorMessage = L10n.format(
             "Moved point to %d°C at %d%%.",
             Int(point.temperature),
@@ -537,7 +940,14 @@ final class FanControlStore {
             if rawTemperature >= 100 {
                 try await fanControl.apply(.maximum)
                 isCurveOverrideActive = true
-                curveTargetRPMs = Dictionary(uniqueKeysWithValues: fans.map { ($0.index, $0.maximumRPM) })
+                curveTargetRPMs = Dictionary(uniqueKeysWithValues: fans.map { fan in
+                    (
+                        fan.index,
+                        ThermalCurveProfile.maximumTargetRPM(
+                            maximumRPM: fan.maximumRPM
+                        )
+                    )
+                })
                 previousCurveTargets = curveTargetRPMs
                 curveStatus = L10n.string("Emergency cooling at maximum speed")
                 return
@@ -555,7 +965,13 @@ final class FanControlStore {
                 return
             }
 
-            guard let fraction = activeScheduleCurve.fanFraction(at: temperature) else {
+            let fractions = Dictionary(uniqueKeysWithValues: fans.compactMap { fan -> (Int, Double)? in
+                guard let fraction = activeScheduleCurve.fanFraction(at: temperature, fanIndex: fan.index) else {
+                    return nil
+                }
+                return (fan.index, fraction)
+            })
+            guard !fractions.isEmpty else {
                 curveStatus = L10n.format(
                     "System control · activates at %d°C",
                     Int(activation)
@@ -566,9 +982,9 @@ final class FanControlStore {
 
             var nextTargets: [Int: Double] = [:]
             for fan in fans {
+                let fraction = fractions[fan.index]
                 let requested = ThermalCurveProfile.targetRPM(
-                    for: fraction,
-                    minimumRPM: fan.minimumRPM,
+                    for: fraction ?? 0,
                     maximumRPM: fan.maximumRPM
                 )
                 if requested == 0 {
@@ -583,17 +999,29 @@ final class FanControlStore {
                 } else {
                     limited = max(requested, previous - 350)
                 }
-                let target = min(max(limited, fan.minimumRPM), fan.maximumRPM)
+                let maximumTarget = ThermalCurveProfile.maximumTargetRPM(
+                    maximumRPM: fan.maximumRPM
+                )
+                let target = min(max(limited, 0), maximumTarget)
                 try await fanControl.setTargetRPM(target, fan: fan.index)
                 nextTargets[fan.index] = target
             }
             previousCurveTargets = nextTargets
             curveTargetRPMs = nextTargets
             isCurveOverrideActive = true
-            curveStatus = L10n.format(
-                "%d%% fan demand",
-                Int((fraction * 100).rounded())
-            )
+            let percentageValues = fans.compactMap { fan -> Int? in
+                guard let fraction = fractions[fan.index] else { return 0 }
+                return Int((fraction * 100).rounded())
+            }
+            if Set(percentageValues).count <= 1, let percentage = percentageValues.first {
+                curveStatus = L10n.format("%d%% fan demand", percentage)
+            } else {
+                let values = fans.map { fan in
+                    let percentage = Int(((fractions[fan.index] ?? 0) * 100).rounded())
+                    return "\(fan.name) \(percentage)%"
+                }.joined(separator: " · ")
+                curveStatus = L10n.format("Independent fan control · %@", values)
+            }
         } catch {
             await failCurveSafely(message: error.localizedDescription)
         }
@@ -687,6 +1115,34 @@ final class FanControlStore {
         )
         persistCustomCurves()
         return editable.id
+    }
+
+    private func mutateEditableCurve(
+        fanIndex: Int?,
+        mutation: (inout ThermalCurveProfile) -> Void
+    ) {
+        let editableID = ensureEditableCurve()
+        guard let profileIndex = curveProfiles.firstIndex(where: { $0.id == editableID }) else { return }
+        var editableProfile = curveProfiles[profileIndex].displayProfile(for: fanIndex)
+        mutation(&editableProfile)
+
+        guard let fanIndex else {
+            curveProfiles[profileIndex].points = editableProfile.points
+            return
+        }
+        let fanName = fans.first(where: { $0.index == fanIndex })?.name
+            ?? curveProfiles[profileIndex].fanCurves?.first(where: { $0.fanIndex == fanIndex })?.fanName
+            ?? L10n.string("Fan")
+        let fanCurve = FanSpecificCurve(
+            fanIndex: fanIndex,
+            fanName: fanName,
+            points: editableProfile.points
+        )
+        if let curveIndex = curveProfiles[profileIndex].fanCurves?.firstIndex(where: { $0.fanIndex == fanIndex }) {
+            curveProfiles[profileIndex].fanCurves?[curveIndex] = fanCurve
+        } else {
+            curveProfiles[profileIndex].fanCurves = (curveProfiles[profileIndex].fanCurves ?? []) + [fanCurve]
+        }
     }
 
     private func persistCustomCurves() {

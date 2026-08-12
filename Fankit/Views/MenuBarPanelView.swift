@@ -125,7 +125,7 @@ struct MenuBarPanelView: View {
                     set: store.selectAICurve
                 )) {
                     ForEach(store.aiProfiles) { aiProfile in
-                        Text(verbatim: aiProfile.localizedName)
+                        Text(verbatim: aiProfile.aiPresetKind.map { "\($0.title) · \(aiProfile.name)" } ?? aiProfile.localizedName)
                             .tag(aiProfile.id)
                     }
                 }

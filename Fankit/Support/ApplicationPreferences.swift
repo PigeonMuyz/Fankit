@@ -8,6 +8,11 @@ enum PreferenceKey {
     static let menuBarShowCPU = "menuBarShowCPU"
     static let menuBarShowGPU = "menuBarShowGPU"
     static let menuBarShowFanSpeed = "menuBarShowFanSpeed"
+    static let quietCalibrationProfile = "quietCalibrationProfile"
+    static let automaticallyCheckForUpdates = "automaticallyCheckForUpdates"
+    static let checkForUpdatesAtEveryLaunch = "checkForUpdatesAtEveryLaunch"
+    static let lastUpdateCheck = "lastUpdateCheck"
+    static let cachedLatestRelease = "cachedLatestRelease"
 }
 
 enum ApplicationPreferences {
@@ -39,6 +44,8 @@ enum ApplicationPreferences {
             PreferenceKey.menuBarShowCPU: true,
             PreferenceKey.menuBarShowGPU: true,
             PreferenceKey.menuBarShowFanSpeed: true,
+            PreferenceKey.automaticallyCheckForUpdates: true,
+            PreferenceKey.checkForUpdatesAtEveryLaunch: false,
             "menuBarIconStyle": MenuBarIconStyle.thermometer.rawValue,
             "menuBarCustomSymbol": "thermometer.medium",
             "refreshInterval": 2.0,
