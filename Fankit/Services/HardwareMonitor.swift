@@ -53,9 +53,9 @@ final class HardwareMonitor {
             : L10n.format("Fan %d", index + 1)
     }
 
-    // Apple changes sensor keys between SoC generations. This first catalog is
-    // intentionally scoped to M1-family machines and common chassis sensors;
-    // unknown values are omitted instead of being presented under a false name.
+    // Apple changes sensor keys between SoC generations. Keep generation-specific
+    // keys explicit so unsupported values are omitted instead of being shown under
+    // a false name.
     private static let sensorDefinitions: [SensorDefinition] = [
         .init(key: "Tp09", name: "Efficiency Core 1", group: .cpu),
         .init(key: "Tp0T", name: "Efficiency Core 2", group: .cpu),
@@ -67,6 +67,14 @@ final class HardwareMonitor {
         .init(key: "Tp0P", name: "Performance Core 6", group: .cpu),
         .init(key: "Tp0X", name: "Performance Core 7", group: .cpu),
         .init(key: "Tp0b", name: "Performance Core 8", group: .cpu),
+        .init(key: "Tg0U", name: "GPU Cluster 1", group: .gpu),
+        .init(key: "Tg0X", name: "GPU Cluster 2", group: .gpu),
+        .init(key: "Tg0d", name: "GPU Cluster 3", group: .gpu),
+        .init(key: "Tg0g", name: "GPU Cluster 4", group: .gpu),
+        .init(key: "Tg0j", name: "GPU Cluster 5", group: .gpu),
+        .init(key: "Tg1Y", name: "GPU Cluster 6", group: .gpu),
+        .init(key: "Tg1c", name: "GPU Cluster 7", group: .gpu),
+        .init(key: "Tg1g", name: "GPU Cluster 8", group: .gpu),
         .init(key: "Tg05", name: "GPU Cluster 1", group: .gpu),
         .init(key: "Tg0D", name: "GPU Cluster 2", group: .gpu),
         .init(key: "Tg0L", name: "GPU Cluster 3", group: .gpu),

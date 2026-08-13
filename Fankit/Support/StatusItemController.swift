@@ -4,14 +4,16 @@ import SwiftUI
 @MainActor
 final class StatusItemController: NSObject {
     private let store: FanControlStore
+    private let openMainWindow: () -> Void
     private let statusItem: NSStatusItem
     private let labelView = StatusItemLabelView()
     private let popover = NSPopover()
     private var observers: [NSObjectProtocol] = []
     private var currentLanguageRaw = ""
 
-    init(store: FanControlStore) {
+    init(store: FanControlStore, openMainWindow: @escaping () -> Void) {
         self.store = store
+        self.openMainWindow = openMainWindow
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
 
@@ -137,12 +139,27 @@ final class StatusItemController: NSObject {
     private func showMainWindow() {
         popover.performClose(nil)
         NSApp.activate(ignoringOtherApps: true)
-        let window = NSApp.windows.first {
-            $0.identifier?.rawValue.hasPrefix("main-") == true
-        } ?? NSApp.windows.first {
-            $0.canBecomeMain && $0 !== popover.contentViewController?.view.window
+
+        if let window = existingMainWindow() {
+            window.makeKeyAndOrderFront(nil)
+            return
         }
-        window?.makeKeyAndOrderFront(nil)
+
+        openMainWindow()
+        Task { @MainActor [weak self] in
+            self?.existingMainWindow()?.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private func existingMainWindow() -> NSWindow? {
+        let popoverWindow = popover.contentViewController?.view.window
+        return NSApp.windows.first { window in
+            guard window !== popoverWindow, window.isVisible else { return false }
+            if let identifier = window.identifier?.rawValue {
+                return identifier == "main" || identifier.hasPrefix("main-")
+            }
+            return window.canBecomeMain
+        }
     }
 
     private func showSettings() {

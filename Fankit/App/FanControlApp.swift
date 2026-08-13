@@ -21,9 +21,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
-    func configureStatusItem(store: FanControlStore) {
+    func configureStatusItem(
+        store: FanControlStore,
+        openMainWindow: @escaping () -> Void
+    ) {
         guard statusItemController == nil else { return }
-        statusItemController = StatusItemController(store: store)
+        statusItemController = StatusItemController(
+            store: store,
+            openMainWindow: openMainWindow
+        )
     }
 
     private func updateDockPreference(activate: Bool = false) {
@@ -52,15 +58,12 @@ struct FanControlApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Fankit", id: "main") {
+        Window("Fankit", id: "main") {
             ContentView(store: store, updateService: updateService)
                 .frame(minWidth: 720, minHeight: 560)
                 .environment(\.locale, language.locale)
                 .background {
-                    StatusItemBootstrapView {
-                        appDelegate.configureStatusItem(store: store)
-                        store.start()
-                    }
+                    StatusItemBootstrapView(appDelegate: appDelegate, store: store)
                 }
         }
         .defaultSize(width: 820, height: 640)
@@ -73,13 +76,18 @@ struct FanControlApp: App {
 }
 
 private struct StatusItemBootstrapView: View {
-    let configure: () -> Void
+    let appDelegate: AppDelegate
+    let store: FanControlStore
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .task {
-                configure()
+                appDelegate.configureStatusItem(store: store) {
+                    openWindow(id: "main")
+                }
+                store.start()
             }
     }
 }
