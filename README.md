@@ -46,10 +46,10 @@ changing the existing approval switch.
 Create a local Release app and a drag-to-install DMG with:
 
 ```sh
-./script/build_release_dmg.sh 1.0.10
+./script/build_release_dmg.sh 1.0.11
 ```
 
-The output is written to `dist/Fankit-1.0.10.dmg` together with its SHA-256
+The output is written to `dist/Fankit-1.0.11.dmg` together with its SHA-256
 checksum. The script automatically selects the local code-signing identity that
 matches the currently registered Fankit helper, or you can choose
 one explicitly with `SIGNING_IDENTITY=<identity>`. If several identities exist

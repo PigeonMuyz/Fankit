@@ -142,6 +142,7 @@ final class StatusItemController: NSObject {
 
         if let window = existingMainWindow() {
             window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
             return
         }
 
@@ -154,7 +155,10 @@ final class StatusItemController: NSObject {
     private func existingMainWindow() -> NSWindow? {
         let popoverWindow = popover.contentViewController?.view.window
         return NSApp.windows.first { window in
-            guard window !== popoverWindow, window.isVisible else { return false }
+            // A SwiftUI `Window` remains registered with NSApp after the user
+            // closes it, but is no longer visible. Reuse that window directly;
+            // calling openWindow for an already-existing hidden scene is a no-op.
+            guard window !== popoverWindow else { return false }
             if let identifier = window.identifier?.rawValue {
                 return identifier == "main" || identifier.hasPrefix("main-")
             }
