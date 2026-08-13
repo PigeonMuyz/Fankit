@@ -141,6 +141,49 @@ final class FanControlService {
         SMAppService.openSystemSettingsLoginItems()
     }
 
+    func installUpdate(
+        diskImageURL: URL,
+        currentAppURL: URL,
+        releaseVersion: String
+    ) async throws {
+        guard daemon.status == .enabled else {
+            throw FanControlError.helperUnavailable(status.detail)
+        }
+
+        let connection = try helperConnection()
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+                continuation.resume(throwing: FanControlError.helperUnavailable(
+                    error.localizedDescription
+                ))
+            }
+            guard let helper = proxy as? FanControlHelperProtocol else {
+                continuation.resume(throwing: FanControlError.helperUnavailable(
+                    L10n.string("Unable to create the helper XPC proxy.")
+                ))
+                return
+            }
+            helper.installUpdate(
+                diskImagePath: diskImageURL.path,
+                currentAppPath: currentAppURL.path,
+                releaseVersion: releaseVersion
+            ) { errorMessage in
+                if let errorMessage {
+                    continuation.resume(throwing: FanControlError.helperUnavailable(
+                        self.localizedHelperError(errorMessage)
+                    ))
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    func prepareForAppUpdate() async throws {
+        guard daemon.status == .enabled else { return }
+        _ = try await restartDaemonAfterUpdate()
+    }
+
     func apply(_ mode: FanControlMode) async throws {
         switch mode {
         case .system:
@@ -408,6 +451,8 @@ final class FanControlService {
             return L10n.format("The SMC firmware rejected the request (code %@).", value)
         case "unsupportedValueType":
             return L10n.format("The SMC data type %@ is not supported.", value)
+        case "update-installation-failed":
+            return L10n.string("The privileged helper could not install the update.")
         default:
             return L10n.string("The control helper reported an unexpected error.")
         }

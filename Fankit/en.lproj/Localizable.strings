@@ -50,12 +50,11 @@
 "Install Fankit Update?" = "Install Fankit Update?";
 "Install and Restart" = "Install and Restart";
 "Fankit will download, verify, install version %@, and restart." = "Fankit will download, verify, install version %@, and restart.";
-"Fankit could not replace the app automatically, so the verified DMG was opened for manual installation." = "Fankit could not replace the app automatically, so the verified DMG was opened for manual installation.";
+"Fankit could not install the update automatically." = "Fankit could not install the update automatically.";
 "Fankit could not verify or install the update safely." = "Fankit could not verify or install the update safely.";
 "Fankit could not verify that the update was signed by the same developer team." = "Fankit could not verify that the update was signed by the same developer team.";
 "This release does not provide a SHA-256 checksum." = "This release does not provide a SHA-256 checksum.";
 "The downloaded update failed SHA-256 verification." = "The downloaded update failed SHA-256 verification.";
-"Fankit could not open the downloaded installer." = "Fankit could not open the downloaded installer.";
 "Calibrate Quiet Fan Noise" = "Calibrate Quiet Fan Noise";
 "Calibrate fan noise in Settings to improve quiet curves and AI scheduling for this Mac." = "Calibrate fan noise in Settings to improve quiet curves and AI scheduling for this Mac.";
 "Open Quiet Calibration" = "Open Quiet Calibration";
@@ -343,6 +342,7 @@
 "The SMC firmware rejected the request (code %@)." = "The SMC firmware rejected the request (code %@).";
 "The SMC data type %@ is not supported." = "The SMC data type %@ is not supported.";
 "The control helper reported an unexpected error." = "The control helper reported an unexpected error.";
+"The privileged helper could not install the update." = "The privileged helper could not install the update.";
 "Unable to change the login item setting." = "Unable to change the login item setting.";
 "AI Preset Preview" = "AI Preset Preview";
 "AI preset" = "AI preset";

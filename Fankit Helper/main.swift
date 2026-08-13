@@ -2,6 +2,41 @@ import Darwin
 import Foundation
 import OSLog
 
+if CommandLine.arguments.contains("--install-update") {
+    guard geteuid() == 0 else {
+        fputs("Fankit update installer must run as root.\n", stderr)
+        exit(EXIT_FAILURE)
+    }
+
+    func argumentValue(_ name: String) -> String? {
+        guard let index = CommandLine.arguments.firstIndex(of: name),
+              index + 1 < CommandLine.arguments.count
+        else { return nil }
+        return CommandLine.arguments[index + 1]
+    }
+
+    guard let diskImagePath = argumentValue("--disk-image"),
+          let currentAppPath = argumentValue("--current-app"),
+          let releaseVersion = argumentValue("--release-version")
+    else {
+        fputs("Missing update installer arguments.\n", stderr)
+        exit(EXIT_FAILURE)
+    }
+
+    do {
+        try PrivilegedAppUpdateInstaller.install(
+            diskImageURL: URL(fileURLWithPath: diskImagePath),
+            currentAppURL: URL(fileURLWithPath: currentAppPath),
+            releaseVersion: releaseVersion,
+            requireCurrentProcessBundle: false
+        )
+        exit(EXIT_SUCCESS)
+    } catch {
+        fputs("Fankit update installation failed: \(error.localizedDescription)\n", stderr)
+        exit(EXIT_FAILURE)
+    }
+}
+
 final class HelperListenerDelegate: NSObject, NSXPCListenerDelegate {
     private let state: HelperState
     private let log = Logger(subsystem: FanControlHelperConstants.machServiceName, category: "XPC")

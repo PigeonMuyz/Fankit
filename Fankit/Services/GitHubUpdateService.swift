@@ -57,6 +57,7 @@ final class GitHubUpdateService {
     private(set) var lastCheckedAt: Date?
 
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let fanControl = FanControlService()
     @ObservationIgnored private let releasesEndpoint = URL(
         string: "https://api.github.com/repos/PigeonMuyz/Fankit/releases/latest"
     )!
@@ -173,6 +174,7 @@ final class GitHubUpdateService {
             let diskImageURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("Fankit-\(release.version)-\(UUID().uuidString).dmg")
             try FileManager.default.moveItem(at: temporaryURL, to: diskImageURL)
+            defer { try? FileManager.default.removeItem(at: diskImageURL) }
 
             guard let teamIdentifier = FanControlCodeSigning.teamIdentifier() else {
                 throw UpdateError.cannotVerifyInstaller
@@ -185,36 +187,72 @@ final class GitHubUpdateService {
             let releaseVersion = release.version
             let installedVersion = currentVersion
             let installedAppURL = Bundle.main.bundleURL
-            let installationResult = try await Task.detached {
-                try AppUpdateInstaller.install(
-                    diskImageURL: diskImageURL,
-                    releaseVersion: releaseVersion,
-                    currentVersion: installedVersion,
-                    currentAppURL: installedAppURL,
-                    bundleIdentifier: bundleIdentifier,
-                    codeSigningRequirement: codeSigningRequirement
-                )
-            }.value
+            var installationResult: AppUpdateInstallationResult?
+            let helperSupportsInPlaceUpdates = Self.compareVersions(
+                installedVersion,
+                "1.0.13"
+            ) != .orderedAscending
 
-            switch installationResult {
-            case .installed(let appURL):
-                try? FileManager.default.removeItem(at: diskImageURL)
-                let configuration = NSWorkspace.OpenConfiguration()
-                configuration.activates = true
-                configuration.createsNewApplicationInstance = true
-                try await NSWorkspace.shared.openApplication(
-                    at: appURL,
-                    configuration: configuration
-                )
-                NSApp.terminate(nil)
-            case .manualInstallationRequired(let diskImageURL):
-                guard NSWorkspace.shared.open(diskImageURL) else {
-                    throw UpdateError.cannotOpenInstaller
+            // New helpers perform the replacement as root, so the running app
+            // never needs to make /Applications writable or open a DMG for the
+            // user. Older helpers do not know this XPC method; keep a bridge for
+            // them below so the first update can still finish automatically.
+            if helperSupportsInPlaceUpdates {
+                do {
+                    try await fanControl.installUpdate(
+                        diskImageURL: diskImageURL,
+                        currentAppURL: installedAppURL,
+                        releaseVersion: releaseVersion
+                    )
+                    installationResult = .installed(installedAppURL)
+                } catch {
+                    NSLog("Fankit helper update path unavailable; trying compatibility paths: %@", error.localizedDescription)
                 }
-                errorMessage = L10n.string(
-                    "Fankit could not replace the app automatically, so the verified DMG was opened for manual installation."
-                )
             }
+            if installationResult == nil {
+                try await fanControl.prepareForAppUpdate()
+                installationResult = try await Task.detached {
+                    try AppUpdateInstaller.install(
+                        diskImageURL: diskImageURL,
+                        releaseVersion: releaseVersion,
+                        currentVersion: installedVersion,
+                        currentAppURL: installedAppURL,
+                        bundleIdentifier: bundleIdentifier,
+                        codeSigningRequirement: codeSigningRequirement
+                    )
+                }.value
+            }
+
+            if case .requiresAdministratorAuthorization = installationResult {
+                // A standard-user installation cannot replace /Applications on
+                // its own. Run the already verified, same-team helper from the
+                // downloaded app with macOS administrator authorization instead
+                // of opening the DMG and asking the user to copy files.
+                try await Task.detached {
+                    try AppUpdateInstaller.installUsingAdministratorPrivileges(
+                        diskImageURL: diskImageURL,
+                        releaseVersion: releaseVersion,
+                        currentVersion: installedVersion,
+                        currentAppURL: installedAppURL,
+                        bundleIdentifier: bundleIdentifier,
+                        codeSigningRequirement: codeSigningRequirement
+                    )
+                }.value
+                installationResult = .installed(installedAppURL)
+            }
+
+            guard case .installed(let appURL) = installationResult else {
+                throw UpdateError.installationFailed
+            }
+
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            configuration.createsNewApplicationInstance = true
+            try await NSWorkspace.shared.openApplication(
+                at: appURL,
+                configuration: configuration
+            )
+            NSApp.terminate(nil)
         } catch {
             errorMessage = Self.localizedMessage(for: error)
         }
@@ -298,7 +336,7 @@ private enum UpdateError: Error {
     case httpFailure(Int)
     case checksumUnavailable
     case checksumMismatch
-    case cannotOpenInstaller
+    case installationFailed
     case cannotVerifyInstaller
 
     var localizedMessage: String {
@@ -315,8 +353,8 @@ private enum UpdateError: Error {
             L10n.string("This release does not provide a SHA-256 checksum.")
         case .checksumMismatch:
             L10n.string("The downloaded update failed SHA-256 verification.")
-        case .cannotOpenInstaller:
-            L10n.string("Fankit could not open the downloaded installer.")
+        case .installationFailed:
+            L10n.string("Fankit could not install the update automatically.")
         case .cannotVerifyInstaller:
             L10n.string("Fankit could not verify that the update was signed by the same developer team.")
         }

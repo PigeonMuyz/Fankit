@@ -50,12 +50,11 @@
 "Install Fankit Update?" = "安裝 Fankit 更新？";
 "Install and Restart" = "安裝並重新啟動";
 "Fankit will download, verify, install version %@, and restart." = "Fankit 會下載、校驗同安裝版本 %@，之後重新啟動。";
-"Fankit could not replace the app automatically, so the verified DMG was opened for manual installation." = "Fankit 無法自動取代應用程式，已經開啟通過校驗嘅 DMG 畀你手動安裝。";
+"Fankit could not install the update automatically." = "Fankit 無法自動安裝更新。";
 "Fankit could not verify or install the update safely." = "Fankit 無法安全噉校驗或者安裝呢個更新。";
 "Fankit could not verify that the update was signed by the same developer team." = "Fankit 無法確認更新係由同一個開發者團隊簽署。";
 "This release does not provide a SHA-256 checksum." = "呢個版本冇提供 SHA-256 校驗值。";
 "The downloaded update failed SHA-256 verification." = "下載嘅更新未能通過 SHA-256 校驗。";
-"Fankit could not open the downloaded installer." = "Fankit 無法開啟下載咗嘅安裝檔。";
 "Calibrate Quiet Fan Noise" = "校準靜音風扇噪音";
 "Calibrate fan noise in Settings to improve quiet curves and AI scheduling for this Mac." = "喺設定校準風扇噪音，可以改善呢部 Mac 嘅靜音曲線同 AI 調度效果。";
 "Open Quiet Calibration" = "開啟靜音校準";
@@ -344,6 +343,7 @@
 "The SMC firmware rejected the request (code %@)." = "SMC 韌體拒絕咗要求（代碼 %@）。";
 "The SMC data type %@ is not supported." = "暫時唔支援 SMC 資料類型 %@。";
 "The control helper reported an unexpected error." = "控制 Helper 報告咗未預期錯誤。";
+"The privileged helper could not install the update." = "特權 Helper 無法安裝更新。";
 "Unable to change the login item setting." = "無法更改登入項目設定。";
 "AI Preset Preview" = "AI 預設預覽";
 "AI preset" = "AI 預設";

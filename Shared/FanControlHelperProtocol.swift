@@ -49,5 +49,11 @@ protocol FanControlHelperProtocol {
     func setTargetRPM(_ rpm: Double, fan: Int, reply: @escaping (String?) -> Void)
     func heartbeat()
     func disconnectAndRestore(reply: @escaping (String?) -> Void)
+    func installUpdate(
+        diskImagePath: String,
+        currentAppPath: String,
+        releaseVersion: String,
+        reply: @escaping (String?) -> Void
+    )
     func restartAfterUpdate(reply: @escaping (String?) -> Void)
 }

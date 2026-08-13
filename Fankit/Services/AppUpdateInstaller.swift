@@ -3,7 +3,7 @@ import Security
 
 enum AppUpdateInstallationResult: Sendable {
     case installed(URL)
-    case manualInstallationRequired(URL)
+    case requiresAdministratorAuthorization(URL)
 }
 
 enum AppUpdateInstaller {
@@ -39,7 +39,7 @@ enum AppUpdateInstaller {
 
         let parentURL = currentAppURL.deletingLastPathComponent()
         guard FileManager.default.isWritableFile(atPath: parentURL.path) else {
-            return .manualInstallationRequired(diskImageURL)
+            return .requiresAdministratorAuthorization(diskImageURL)
         }
 
         let stagingURL = parentURL.appendingPathComponent(
@@ -62,8 +62,55 @@ enum AppUpdateInstaller {
         } catch let error as AppUpdateInstallationError {
             throw error
         } catch {
-            return .manualInstallationRequired(diskImageURL)
+            return .requiresAdministratorAuthorization(diskImageURL)
         }
+    }
+
+    nonisolated static func installUsingAdministratorPrivileges(
+        diskImageURL: URL,
+        releaseVersion: String,
+        currentVersion: String,
+        currentAppURL: URL,
+        bundleIdentifier: String,
+        codeSigningRequirement: String
+    ) throws {
+        let mountData = try run(
+            "/usr/sbin/diskutil",
+            arguments: [
+                "image", "attach", "--mountOptions", "nobrowse", "--readOnly", "--plist",
+                diskImageURL.path,
+            ]
+        )
+        let mountPoint = try mountedVolume(from: mountData)
+        defer { try? eject(mountPoint) }
+
+        let updateAppURL = mountPoint.appendingPathComponent("Fankit.app", isDirectory: true)
+        let helperURL = updateAppURL.appendingPathComponent(
+            "Contents/MacOS/FankitHelper",
+            isDirectory: false
+        )
+        guard FileManager.default.fileExists(atPath: updateAppURL.path),
+              FileManager.default.isExecutableFile(atPath: helperURL.path)
+        else {
+            throw AppUpdateInstallationError.appMissing
+        }
+        try validate(
+            appAt: updateAppURL,
+            releaseVersion: releaseVersion,
+            currentVersion: currentVersion,
+            bundleIdentifier: bundleIdentifier,
+            codeSigningRequirement: codeSigningRequirement
+        )
+
+        let command = [
+            shellQuote(helperURL.path),
+            "--install-update",
+            "--disk-image", shellQuote(diskImageURL.path),
+            "--current-app", shellQuote(currentAppURL.path),
+            "--release-version", shellQuote(releaseVersion),
+        ].joined(separator: " ")
+        let script = "do shell script \(appleScriptString(command)) with administrator privileges"
+        _ = try run("/usr/bin/osascript", arguments: ["-e", script])
     }
 
     private nonisolated static func mountedVolume(from data: Data) throws -> URL {
@@ -127,6 +174,17 @@ enum AppUpdateInstaller {
 
     private nonisolated static func eject(_ mountPoint: URL) throws {
         _ = try run("/usr/sbin/diskutil", arguments: ["eject", mountPoint.path])
+    }
+
+    private nonisolated static func shellQuote(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+
+    private nonisolated static func appleScriptString(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
     }
 
     @discardableResult

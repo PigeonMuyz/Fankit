@@ -46,10 +46,10 @@ changing the existing approval switch.
 Create a local Release app and a drag-to-install DMG with:
 
 ```sh
-./script/build_release_dmg.sh 1.0.12
+./script/build_release_dmg.sh 1.0.13
 ```
 
-The output is written to `dist/Fankit-1.0.12.dmg` together with its SHA-256
+The output is written to `dist/Fankit-1.0.13.dmg` together with its SHA-256
 checksum. The script automatically selects the local code-signing identity that
 matches the currently registered Fankit helper, or you can choose
 one explicitly with `SIGNING_IDENTITY=<identity>`. If several identities exist
@@ -73,8 +73,10 @@ Release DMGs should keep the `Fankit-<version>.dmg` name and include either
 GitHub's asset `sha256:` digest or a matching `.dmg.sha256` asset. After the user
 confirms an update, Fankit downloads the DMG, verifies its SHA-256 digest, checks
 that the contained app has the expected version, bundle identifier, and developer
-team signature, replaces the installed app, and restarts. If the current install
-location is not writable, it opens the already verified DMG for manual installation.
+team signature, replaces the installed app through the signed privileged helper,
+and restarts. If an older helper does not yet support in-place updates, Fankit
+uses the verified helper from the downloaded app with macOS administrator
+authorization; it does not ask the user to copy the app from the DMG manually.
 
 ## Signing for open-source builds
 
