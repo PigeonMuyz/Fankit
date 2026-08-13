@@ -283,6 +283,8 @@ private struct UpdateSettingsView: View {
     let updateService: GitHubUpdateService
     @AppStorage(PreferenceKey.automaticallyCheckForUpdates) private var automaticallyChecks = true
     @AppStorage(PreferenceKey.checkForUpdatesAtEveryLaunch) private var checksAtEveryLaunch = false
+    @AppStorage(PreferenceKey.githubAPIToken) private var apiToken = ""
+    @State private var showsUpdateConfirmation = false
 
     var body: some View {
         Form {
@@ -297,6 +299,25 @@ private struct UpdateSettingsView: View {
                 Text("Automatic checks use a 12-hour interval unless every-launch checking is enabled.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                LabeledContent("GitHub API Token") {
+                    HStack {
+                        SecureField(
+                            "Optional token",
+                            text: $apiToken
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 220)
+                        if !apiToken.isEmpty {
+                            Button("Clear", role: .destructive) {
+                                apiToken = ""
+                            }
+                        }
+                    }
+                }
+                Text("The optional token is saved in Fankit's preferences and only sent to GitHub API requests. No repository write permission is needed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("GitHub Releases") {
@@ -306,6 +327,15 @@ private struct UpdateSettingsView: View {
                             .controlSize(.small)
                         Text("Checking for Updates…")
                             .foregroundStyle(.secondary)
+                    } else if let errorMessage = updateService.errorMessage,
+                              !updateService.isUpdateAvailable
+                    {
+                        Label {
+                            Text(verbatim: errorMessage)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                        }
+                        .foregroundStyle(.orange)
                     } else if let release = updateService.latestRelease,
                               updateService.isUpdateAvailable
                     {
@@ -349,13 +379,13 @@ private struct UpdateSettingsView: View {
                         }
                         Spacer()
                         Button {
-                            Task { await updateService.downloadAndOpenUpdate() }
+                            showsUpdateConfirmation = true
                         } label: {
                             if updateService.isDownloading {
                                 ProgressView()
                                     .controlSize(.small)
                             } else {
-                                Text("Download and Open Update")
+                                Text("Install Update")
                             }
                         }
                         .buttonStyle(.borderedProminent)
@@ -363,7 +393,9 @@ private struct UpdateSettingsView: View {
                     }
                 }
 
-                if let errorMessage = updateService.errorMessage {
+                if let errorMessage = updateService.errorMessage,
+                   updateService.isUpdateAvailable
+                {
                     Label {
                         Text(verbatim: errorMessage)
                     } icon: {
@@ -378,6 +410,19 @@ private struct UpdateSettingsView: View {
         .onChange(of: automaticallyChecks) { _, enabled in
             guard enabled else { return }
             Task { await updateService.checkForUpdates() }
+        }
+        .alert("Install Fankit Update?", isPresented: $showsUpdateConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Install and Restart") {
+                Task { await updateService.downloadAndInstallUpdate() }
+            }
+        } message: {
+            if let release = updateService.latestRelease {
+                Text(verbatim: L10n.format(
+                    "Fankit will download, verify, install version %@, and restart.",
+                    release.version
+                ))
+            }
         }
     }
 }

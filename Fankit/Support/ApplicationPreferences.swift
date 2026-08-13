@@ -13,6 +13,8 @@ enum PreferenceKey {
     static let checkForUpdatesAtEveryLaunch = "checkForUpdatesAtEveryLaunch"
     static let lastUpdateCheck = "lastUpdateCheck"
     static let cachedLatestRelease = "cachedLatestRelease"
+    static let cachedLatestReleaseETag = "cachedLatestReleaseETag"
+    static let githubAPIToken = "githubAPIToken"
 }
 
 enum ApplicationPreferences {
