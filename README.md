@@ -46,10 +46,10 @@ changing the existing approval switch.
 Create a local Release app and a drag-to-install DMG with:
 
 ```sh
-./script/build_release_dmg.sh 1.0.7
+./script/build_release_dmg.sh 1.0.8
 ```
 
-The output is written to `dist/Fankit-1.0.7.dmg` together with its SHA-256
+The output is written to `dist/Fankit-1.0.8.dmg` together with its SHA-256
 checksum. The script automatically selects the local code-signing identity that
 matches the currently registered Fankit helper, or you can choose
 one explicitly with `SIGNING_IDENTITY=<identity>`. If several identities exist
@@ -99,8 +99,10 @@ mode.
 Before taking manual ownership, the helper writes a recovery marker. It restores
 System mode and clears that marker when the app disconnects, its 15-second lease
 expires, it receives a termination signal, or it restarts after an interrupted
-override. Sleep resets Apple Silicon's SMC control state in firmware; reconnecting
-after wake starts from System mode.
+override. Sleep resets Apple Silicon's SMC control state in firmware. Fankit
+listens for wake, waits for the controller to recover, and reapplies the selected
+manual or curve mode. If the helper cannot be reconnected, its watchdog keeps
+the fans in System mode.
 
 ## License
 

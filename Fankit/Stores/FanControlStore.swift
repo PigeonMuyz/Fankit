@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -55,6 +56,8 @@ final class FanControlStore {
     @ObservationIgnored private let defaults = UserDefaults.standard
     @ObservationIgnored private let startupMode: FanControlMode
     @ObservationIgnored private var didRestoreStartupMode = false
+    @ObservationIgnored private var wakeObserver: NSObjectProtocol?
+    @ObservationIgnored private var wakeRecoveryTask: Task<Void, Never>?
 
     init() {
         startupMode = FanControlMode(
@@ -83,6 +86,14 @@ final class FanControlStore {
         curveProfiles = profiles
         activeCurveID = profiles.contains(where: { $0.id == savedID }) ? savedID! : ThermalCurveProfile.balanced.id
         activeAICurveID = profiles.first(where: { $0.id == savedAICurveID && $0.isAIGenerated })?.id
+    }
+
+    deinit {
+        refreshTask?.cancel()
+        wakeRecoveryTask?.cancel()
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
     }
 
     var canControlFans: Bool { helperStatus == .ready }
@@ -219,6 +230,7 @@ final class FanControlStore {
         guard refreshTask == nil else { return }
         do {
             monitor = try HardwareMonitor()
+            installWakeObserver()
             refresh()
             refreshTask = Task { @MainActor [weak self] in
                 while !Task.isCancelled {
@@ -240,6 +252,10 @@ final class FanControlStore {
     }
 
     func refresh() {
+        refresh(evaluateCurve: true)
+    }
+
+    private func refresh(evaluateCurve: Bool) {
         guard let monitor else { return }
         isRefreshing = true
         fans = monitor.readFans()
@@ -250,7 +266,7 @@ final class FanControlStore {
             : nil
         isRefreshing = false
         NotificationCenter.default.post(name: .fanControlDidRefresh, object: self)
-        if isCurveMode {
+        if evaluateCurve, isCurveMode {
             Task { await evaluateCurveIfNeeded() }
         }
         if isQuietCalibrationActive, (hottestTemperature ?? 0) >= 100 {
@@ -258,6 +274,98 @@ final class FanControlStore {
             stopQuietCalibration(save: false, emergencyCooling: true)
         }
         recordAICaptureSampleIfNeeded()
+    }
+
+    private func installWakeObserver() {
+        guard wakeObserver == nil else { return }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.scheduleWakeRecovery()
+            }
+        }
+    }
+
+    private func scheduleWakeRecovery() {
+        wakeRecoveryTask?.cancel()
+        wakeRecoveryTask = Task { @MainActor [weak self] in
+            // AppleSMC may need a short interval after the workspace wake
+            // notification before manual mode writes are accepted again.
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            await self?.recoverControlAfterWake()
+        }
+    }
+
+    private func recoverControlAfterWake() async {
+        guard selectedMode != .system,
+              !isQuietCalibrationActive,
+              !isStartingQuietCalibration,
+              !isStoppingQuietCalibration
+        else { return }
+
+        var lastError: String?
+        for attempt in 0..<5 {
+            guard !Task.isCancelled,
+                  selectedMode != .system,
+                  !isQuietCalibrationActive,
+                  !isStartingQuietCalibration,
+                  !isStoppingQuietCalibration
+            else { return }
+
+            refresh(evaluateCurve: false)
+            if !canControlFans {
+                await refreshHelperStatus()
+            }
+
+            guard canControlFans else {
+                if attempt < 4 {
+                    try? await Task.sleep(for: .seconds(1))
+                }
+                continue
+            }
+
+            switch selectedMode {
+            case .system:
+                return
+            case .maximum:
+                do {
+                    try await fanControl.apply(.maximum)
+                    controlMessage = nil
+                    refresh(evaluateCurve: false)
+                    return
+                } catch {
+                    lastError = error.localizedDescription
+                }
+            case .autoBoost, .aiScheduling:
+                resetCurveRuntimeState()
+                let hasControlData = !fans.isEmpty && temperatures.contains {
+                    [.cpu, .gpu, .memory].contains($0.group) && $0.celsius.isFinite
+                }
+                guard hasControlData else {
+                    if attempt < 4 {
+                        try? await Task.sleep(for: .seconds(1))
+                    }
+                    continue
+                }
+                await evaluateCurveIfNeeded()
+                if isCurveMode {
+                    refresh(evaluateCurve: false)
+                }
+                return
+            }
+
+            if attempt < 4 {
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+
+        if let lastError {
+            controlMessage = lastError
+        }
     }
 
     func selectMode(_ mode: FanControlMode) {
