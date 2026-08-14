@@ -318,6 +318,7 @@
 "Target %d RPM" = "目標 %d RPM";
 "Target %lld RPM" = "目標 %lld RPM";
 "Temperature" = "溫度";
+"Time" = "時間";
 "Temperatures + RPM" = "溫度 + 轉速";
 "Temperatures only" = "淨係溫度";
 "Unable to communicate with the control helper." = "無法同控制 Helper 通訊。";

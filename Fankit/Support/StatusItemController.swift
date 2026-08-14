@@ -122,7 +122,15 @@ final class StatusItemController: NSObject {
     }
 
     private func updatePopoverContentSize(for mode: FanControlMode) {
-        let height: CGFloat = mode == .autoBoost || mode == .aiScheduling ? 500 : 350
+        let height: CGFloat
+        switch mode {
+        case .autoBoost:
+            height = 410
+        case .aiScheduling:
+            height = 440
+        default:
+            height = 350
+        }
         updatePopoverContentSize(NSSize(width: 380, height: height))
     }
 

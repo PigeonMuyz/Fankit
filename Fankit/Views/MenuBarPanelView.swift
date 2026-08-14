@@ -74,8 +74,10 @@ struct MenuBarPanelView: View {
 
     private var preferredHeight: CGFloat {
         switch selectedSchedule {
-        case .customScheduling, .aiScheduling:
-            500
+        case .customScheduling:
+            410
+        case .aiScheduling:
+            440
         case .systemScheduling, .extremeCooling:
             350
         }
@@ -138,10 +140,7 @@ struct MenuBarPanelView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            MenuBarReadOnlyCurveChart(
-                profile: profile,
-                currentTemperature: store.displayedCurveTemperature
-            )
+            MenuBarLiveTelemetryChart(samples: store.liveTelemetry)
             .frame(height: 132)
         }
     }
@@ -166,10 +165,7 @@ struct MenuBarPanelView: View {
                 .fixedSize()
             }
 
-            MenuBarReadOnlyCurveChart(
-                profile: store.activeCurve,
-                currentTemperature: store.displayedCurveTemperature
-            )
+            MenuBarLiveTelemetryChart(samples: store.liveTelemetry)
             .frame(height: 132)
         }
     }
@@ -270,50 +266,183 @@ private struct MenuBarScheduleMenu: View {
     }
 }
 
-private struct MenuBarReadOnlyCurveChart: View {
-    let profile: ThermalCurveProfile
-    let currentTemperature: Double?
+private struct MenuBarLiveTelemetryChart: View {
+    let samples: [LiveTelemetrySample]
+
+    private let fanColors: [Color] = [.blue, .teal, .purple, .pink, .indigo]
+
+    private var latestSample: LiveTelemetrySample? {
+        samples.last
+    }
+
+    private var latestFans: [FanSnapshot] {
+        latestSample?.fans ?? []
+    }
+
+    private var temperatureDomain: ClosedRange<Double> {
+        guard let minimum = samples.map(\.temperature).min(),
+              let maximum = samples.map(\.temperature).max()
+        else {
+            return 35...100
+        }
+
+        let lower = max(0, floor(minimum - 3))
+        let upper = min(125, ceil(maximum + 3))
+        if upper - lower < 10 {
+            let midpoint = (lower + upper) / 2
+            return max(0, midpoint - 5)...min(125, midpoint + 5)
+        }
+        return lower...upper
+    }
+
+    private var fanDomain: ClosedRange<Double> {
+        let maximum = samples
+            .flatMap(\.fans)
+            .map(\.maximumRPM)
+            .max() ?? 1
+        return 0...max(maximum, 1)
+    }
 
     var body: some View {
-        Chart {
-            ForEach(profile.normalizedPoints) { point in
-                AreaMark(
-                    x: .value("Temperature", point.temperature),
-                    y: .value("Fan demand", point.fanFraction * 100)
-                )
-                .foregroundStyle(.blue.opacity(0.14))
-                .interpolationMethod(.linear)
+        HStack(alignment: .top, spacing: 10) {
+            telemetryCard(
+                title: "Temperature",
+                value: latestSample.map { "\(Int($0.temperature.rounded()))°C" } ?? "--°C"
+            ) {
+                Chart {
+                    ForEach(samples) { sample in
+                        LineMark(
+                            x: .value("Time", sample.timestamp),
+                            y: .value("Temperature", sample.temperature)
+                        )
+                        .foregroundStyle(.orange)
+                        .lineStyle(.init(lineWidth: 1.5))
 
-                LineMark(
-                    x: .value("Temperature", point.temperature),
-                    y: .value("Fan demand", point.fanFraction * 100)
-                )
-                .foregroundStyle(.blue)
-                .lineStyle(.init(lineWidth: 2))
-                .interpolationMethod(.linear)
-
-                PointMark(
-                    x: .value("Temperature", point.temperature),
-                    y: .value("Fan demand", point.fanFraction * 100)
-                )
-                .foregroundStyle(.blue)
-                .symbolSize(42)
+                        if sample.id == latestSample?.id {
+                            PointMark(
+                                x: .value("Time", sample.timestamp),
+                                y: .value("Temperature", sample.temperature)
+                            )
+                            .foregroundStyle(.orange)
+                            .symbolSize(28)
+                        }
+                    }
+                }
+                .chartYScale(domain: temperatureDomain)
             }
 
-            if let currentTemperature {
-                RuleMark(x: .value("Current", currentTemperature))
-                    .foregroundStyle(.orange)
-                    .lineStyle(.init(lineWidth: 1.5, dash: [4, 3]))
-            }
+            fanTelemetryCard
         }
-        .chartXScale(domain: 35...100)
-        .chartYScale(domain: 0...100)
-        .chartXAxisLabel("Temperature (°C)")
-        .chartYAxisLabel("Fan (%)")
-        .chartLegend(.hidden)
-        .accessibilityLabel(
-            Text(verbatim: L10n.format("Fan curve for %@", profile.localizedName))
-        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Monitoring"))
+        .accessibilityValue(Text(verbatim: accessibilitySummary))
+    }
+
+    private func telemetryCard<Content: View>(
+        title: LocalizedStringKey,
+        value: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Spacer(minLength: 2)
+                Text(verbatim: value)
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+
+            content()
+                .chartXAxis(.hidden)
+                .chartYAxis(.hidden)
+                .chartLegend(.hidden)
+                .frame(height: 84)
+                .chartPlotStyle { plot in
+                    plot
+                        .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 6))
+                }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var fanTelemetryCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Text("Fan Speed (RPM)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Spacer(minLength: 2)
+                Text(verbatim: latestFans.map(\.currentRPM).max().map { "\(Int($0.rounded()).formatted())" } ?? "--")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .lineLimit(1)
+            }
+
+            Chart {
+                ForEach(samples) { sample in
+                    ForEach(sample.fans) { fan in
+                        LineMark(
+                            x: .value("Time", sample.timestamp),
+                            y: .value("Fan Speed (RPM)", fan.currentRPM),
+                            series: .value("Fan", fan.name)
+                        )
+                        .foregroundStyle(color(for: fan.index))
+                        .lineStyle(.init(lineWidth: 1.5))
+
+                        if sample.id == latestSample?.id {
+                            PointMark(
+                                x: .value("Time", sample.timestamp),
+                                y: .value("Fan Speed (RPM)", fan.currentRPM)
+                            )
+                            .foregroundStyle(color(for: fan.index))
+                            .symbolSize(24)
+                        }
+                    }
+                }
+            }
+            .chartYScale(domain: fanDomain)
+            .chartXAxis(.hidden)
+            .chartYAxis(.hidden)
+            .chartLegend(.hidden)
+            .frame(height: 72)
+            .chartPlotStyle { plot in
+                plot
+                    .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 6))
+            }
+
+            HStack(spacing: 6) {
+                ForEach(latestFans) { fan in
+                    HStack(spacing: 3) {
+                        Circle()
+                            .fill(color(for: fan.index))
+                            .frame(width: 5, height: 5)
+                        Text(verbatim: fan.name)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func color(for fanIndex: Int) -> Color {
+        fanColors[fanIndex % fanColors.count]
+    }
+
+    private var accessibilitySummary: String {
+        guard let latestSample else { return L10n.string("Monitoring") }
+        let fans = latestSample.fans.map { "\($0.name) \(Int($0.currentRPM.rounded())) RPM" }
+        return "\(Int(latestSample.temperature.rounded()))°C · " + fans.joined(separator: " · ")
     }
 }
 

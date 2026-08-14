@@ -317,6 +317,7 @@
 "Target %d RPM" = "Target %d RPM";
 "Target %lld RPM" = "Target %lld RPM";
 "Temperature" = "Temperature";
+"Time" = "Time";
 "Temperatures + RPM" = "Temperatures + RPM";
 "Temperatures only" = "Temperatures only";
 "Unable to communicate with the control helper." = "Unable to communicate with the control helper.";

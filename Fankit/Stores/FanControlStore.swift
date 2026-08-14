@@ -5,8 +5,11 @@ import Observation
 @MainActor
 @Observable
 final class FanControlStore {
+    private static let liveTelemetrySampleLimit = 20
+
     private(set) var fans: [FanSnapshot] = []
     private(set) var temperatures: [ThermalSensor] = []
+    private(set) var liveTelemetry: [LiveTelemetrySample] = []
     private(set) var isRefreshing = false
     private(set) var lastUpdated: Date?
     private(set) var errorMessage: String?
@@ -49,6 +52,7 @@ final class FanControlStore {
     @ObservationIgnored private var previousCurveTargets: [Int: Double] = [:]
     @ObservationIgnored private var lastCaptureSampleAt: Date?
     @ObservationIgnored private var isAppendingCaptureSample = false
+    @ObservationIgnored private var lastLiveTelemetrySampleAt: Date?
     @ObservationIgnored private var quietCalibrationOriginalMode: FanControlMode?
     @ObservationIgnored private var quietCalibrationStartTask: Task<Void, Never>?
     @ObservationIgnored private var quietCalibrationApplyTask: Task<Void, Never>?
@@ -257,10 +261,12 @@ final class FanControlStore {
 
     private func refresh(evaluateCurve: Bool) {
         guard let monitor else { return }
+        let refreshDate = Date.now
         isRefreshing = true
         fans = monitor.readFans()
         temperatures = monitor.readTemperatures()
-        lastUpdated = .now
+        lastUpdated = refreshDate
+        recordLiveTelemetrySample(at: refreshDate)
         errorMessage = fans.isEmpty && temperatures.isEmpty
             ? L10n.string("AppleSMC is connected, but no supported sensors were found.")
             : nil
@@ -274,6 +280,37 @@ final class FanControlStore {
             stopQuietCalibration(save: false, emergencyCooling: true)
         }
         recordAICaptureSampleIfNeeded()
+    }
+
+    private func recordLiveTelemetrySample(at timestamp: Date) {
+        if let lastLiveTelemetrySampleAt,
+           timestamp.timeIntervalSince(lastLiveTelemetrySampleAt) < 1
+        {
+            return
+        }
+
+        let controlTemperature = temperatures
+            .filter { [.cpu, .gpu, .memory].contains($0.group) }
+            .map(\.celsius)
+            .max()
+
+        guard let controlTemperature,
+              controlTemperature.isFinite,
+              !fans.isEmpty
+        else {
+            return
+        }
+
+        liveTelemetry.append(LiveTelemetrySample(
+            timestamp: timestamp,
+            temperature: controlTemperature,
+            fans: fans
+        ))
+        lastLiveTelemetrySampleAt = timestamp
+
+        if liveTelemetry.count > Self.liveTelemetrySampleLimit {
+            liveTelemetry.removeFirst(liveTelemetry.count - Self.liveTelemetrySampleLimit)
+        }
     }
 
     private func installWakeObserver() {

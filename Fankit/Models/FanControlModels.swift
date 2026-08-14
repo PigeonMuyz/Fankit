@@ -84,6 +84,14 @@ struct FanSnapshot: Identifiable, Equatable {
     }
 }
 
+struct LiveTelemetrySample: Identifiable, Equatable {
+    let timestamp: Date
+    let temperature: Double
+    let fans: [FanSnapshot]
+
+    var id: Date { timestamp }
+}
+
 enum ThermalGroup: String, CaseIterable, Identifiable {
     case cpu = "Processor"
     case gpu = "Graphics"
