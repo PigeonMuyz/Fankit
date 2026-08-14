@@ -6,7 +6,6 @@ final class StatusItemController: NSObject {
     private let store: FanControlStore
     private let openMainWindow: () -> Void
     private let statusItem: NSStatusItem
-    private let labelView = StatusItemLabelView()
     private let popover = NSPopover()
     private var observers: [NSObjectProtocol] = []
     private var currentLanguageRaw = ""
@@ -38,15 +37,8 @@ final class StatusItemController: NSObject {
         button.target = self
         button.action = #selector(togglePopover)
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-
-        labelView.translatesAutoresizingMaskIntoConstraints = false
-        button.addSubview(labelView)
-        NSLayoutConstraint.activate([
-            labelView.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 2),
-            labelView.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -2),
-            labelView.topAnchor.constraint(equalTo: button.topAnchor),
-            labelView.bottomAnchor.constraint(equalTo: button.bottomAnchor),
-        ])
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
     }
 
     private func configurePopover() {
@@ -118,13 +110,14 @@ final class StatusItemController: NSObject {
         // change.
         guard presentation != lastPresentation else { return }
         lastPresentation = presentation
-        labelView.configure(presentation)
-        let preferredLength = labelView.preferredWidth + 4
+        let image = MenuBarStatusImageRenderer.image(for: presentation)
+        statusItem.button?.image = image
+        let preferredLength = image.size.width + 4
         if statusItem.length != preferredLength {
             statusItem.length = preferredLength
         }
-        if statusItem.button?.toolTip != labelView.accessibilitySummary {
-            statusItem.button?.toolTip = labelView.accessibilitySummary
+        if statusItem.button?.toolTip != presentation.accessibilitySummary {
+            statusItem.button?.toolTip = presentation.accessibilitySummary
         }
     }
 

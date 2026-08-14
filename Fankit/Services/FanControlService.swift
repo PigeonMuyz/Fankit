@@ -327,8 +327,10 @@ final class FanControlService {
         requireReadyStatus: Bool = true,
         _ body: @escaping (FanControlHelperProtocol, @escaping (String?) -> Void) -> Void
     ) async throws {
-        if requireReadyStatus && daemon.status != .enabled {
-            throw FanControlError.helperUnavailable(status.detail)
+        if requireReadyStatus && status != .ready {
+            guard daemon.status == .enabled else {
+                throw FanControlError.helperUnavailable(status.detail)
+            }
         }
 
         let connection = try helperConnection()
@@ -384,7 +386,7 @@ final class FanControlService {
     }
 
     private func startHeartbeat() {
-        stopHeartbeat()
+        guard heartbeatTimer == nil else { return }
         let timer = Timer(
             timeInterval: 5,
             target: self,

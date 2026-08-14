@@ -95,3 +95,97 @@ struct MenuBarStatusPresentation: Equatable {
         return "thermometer.medium"
     }
 }
+
+@MainActor
+enum MenuBarStatusImageRenderer {
+    private static let font = NSFont.monospacedDigitSystemFont(
+        ofSize: MenuBarStatusMetrics.fontSize,
+        weight: .medium
+    )
+
+    static func image(for presentation: MenuBarStatusPresentation) -> NSImage {
+        let width = preferredWidth(for: presentation)
+        let size = NSSize(width: width, height: MenuBarStatusMetrics.contentHeight)
+        let image = NSImage(size: size)
+        image.isTemplate = true
+        image.lockFocus()
+        defer { image.unlockFocus() }
+
+        let hasIcon = presentation.symbolName != nil
+        let textX = hasIcon && presentation.layout != .iconOnly
+            ? MenuBarStatusMetrics.iconSize + MenuBarStatusMetrics.iconTextSpacing
+            : 0
+        let iconX = presentation.layout == .iconOnly
+            ? floor((size.width - MenuBarStatusMetrics.iconSize) / 2)
+            : 0
+
+        if let symbolName = presentation.symbolName,
+           let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+        {
+            let configuredSymbol = symbol.withSymbolConfiguration(
+                NSImage.SymbolConfiguration(paletteColors: [.white])
+            ) ?? symbol
+            configuredSymbol.draw(
+                in: NSRect(
+                    x: iconX,
+                    y: floor((size.height - MenuBarStatusMetrics.iconSize) / 2),
+                    width: MenuBarStatusMetrics.iconSize,
+                    height: MenuBarStatusMetrics.iconSize
+                ),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1
+            )
+        }
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.white,
+        ]
+        if let firstLine = presentation.firstLine {
+            NSString(string: firstLine).draw(
+                in: NSRect(
+                    x: textX,
+                    y: presentation.layout == .singleLine
+                        ? floor((size.height - 14) / 2)
+                        : 11,
+                    width: size.width - textX,
+                    height: presentation.layout == .singleLine ? 14 : MenuBarStatusMetrics.lineHeight
+                ),
+                withAttributes: attributes
+            )
+        }
+        if let secondLine = presentation.secondLine {
+            NSString(string: secondLine).draw(
+                in: NSRect(
+                    x: textX,
+                    y: 1,
+                    width: size.width - textX,
+                    height: MenuBarStatusMetrics.lineHeight
+                ),
+                withAttributes: attributes
+            )
+        }
+        return image
+    }
+
+    private static func preferredWidth(for presentation: MenuBarStatusPresentation) -> CGFloat {
+        let hasIcon = presentation.symbolName != nil
+        let iconWidth = hasIcon
+            ? MenuBarStatusMetrics.iconSize
+                + (presentation.hasText ? MenuBarStatusMetrics.iconTextSpacing : 0)
+            : 0
+        let textWidth = max(
+            presentation.firstLine.map(measure) ?? 0,
+            presentation.secondLine.map(measure) ?? 0
+        )
+        return max(
+            iconWidth + textWidth,
+            hasIcon ? MenuBarStatusMetrics.iconSize + 2 : 20
+        )
+    }
+
+    private static func measure(_ string: String) -> CGFloat {
+        ceil((string as NSString).size(withAttributes: [.font: font]).width) + 2
+    }
+}
