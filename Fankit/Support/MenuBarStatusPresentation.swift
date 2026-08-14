@@ -8,10 +8,29 @@ enum MenuBarStatusLayout {
 
 enum MenuBarStatusMetrics {
     static let contentHeight: CGFloat = NSStatusBar.system.thickness
-    static let iconSize: CGFloat = 16
-    static let iconTextSpacing: CGFloat = 3
+    static let iconSize: CGFloat = 18
+    static let iconTextSpacing: CGFloat = 2
+    static let symbolPointSize: CGFloat = 18
     static let fontSize: CGFloat = 9
     static let lineHeight: CGFloat = 11
+
+    static func iconFrame(in size: NSSize, layout: MenuBarStatusLayout) -> NSRect {
+        let x = layout == .iconOnly
+            ? floor((size.width - iconSize) / 2)
+            : 0
+        return NSRect(
+            x: x,
+            y: floor((size.height - iconSize) / 2),
+            width: iconSize,
+            height: iconSize
+        )
+    }
+
+    static func textOriginX(hasIcon: Bool, layout: MenuBarStatusLayout) -> CGFloat {
+        hasIcon && layout != .iconOnly
+            ? iconSize + iconTextSpacing
+            : 0
+    }
 }
 
 struct MenuBarStatusPresentation: Equatable {
@@ -112,30 +131,18 @@ enum MenuBarStatusImageRenderer {
         defer { image.unlockFocus() }
 
         let hasIcon = presentation.symbolName != nil
-        let textX = hasIcon && presentation.layout != .iconOnly
-            ? MenuBarStatusMetrics.iconSize + MenuBarStatusMetrics.iconTextSpacing
-            : 0
-        let iconX = presentation.layout == .iconOnly
-            ? floor((size.width - MenuBarStatusMetrics.iconSize) / 2)
-            : 0
+        let textX = MenuBarStatusMetrics.textOriginX(
+            hasIcon: hasIcon,
+            layout: presentation.layout
+        )
 
         if let symbolName = presentation.symbolName,
-           let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
+           let symbol = configuredSymbol(named: symbolName)
         {
-            let configuredSymbol = symbol.withSymbolConfiguration(
-                NSImage.SymbolConfiguration(paletteColors: [.white])
-            ) ?? symbol
-            configuredSymbol.draw(
-                in: NSRect(
-                    x: iconX,
-                    y: floor((size.height - MenuBarStatusMetrics.iconSize) / 2),
-                    width: MenuBarStatusMetrics.iconSize,
-                    height: MenuBarStatusMetrics.iconSize
-                ),
-                from: .zero,
-                operation: .sourceOver,
-                fraction: 1
-            )
+            drawSymbol(symbol, in: MenuBarStatusMetrics.iconFrame(
+                in: size,
+                layout: presentation.layout
+            ))
         }
 
         let attributes: [NSAttributedString.Key: Any] = [
@@ -182,6 +189,51 @@ enum MenuBarStatusImageRenderer {
         return max(
             iconWidth + textWidth,
             hasIcon ? MenuBarStatusMetrics.iconSize + 2 : 20
+        )
+    }
+
+    static func configuredSymbol(named symbolName: String) -> NSImage? {
+        guard let symbol = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: nil
+        ) else {
+            return nil
+        }
+
+        let configuration = NSImage.SymbolConfiguration(
+            pointSize: MenuBarStatusMetrics.symbolPointSize,
+            weight: .medium,
+            scale: .medium
+        ).applying(NSImage.SymbolConfiguration(paletteColors: [.white]))
+        return symbol.withSymbolConfiguration(configuration) ?? symbol
+    }
+
+    private static func drawSymbol(_ symbol: NSImage, in targetRect: NSRect) {
+        let sourceSize = symbol.size
+        guard sourceSize.width > 0, sourceSize.height > 0 else { return }
+
+        // SF Symbols do not all share the same intrinsic aspect ratio. Fit the
+        // configured symbol into the optical slot instead of stretching every
+        // symbol into the same square, which makes the thermometer look short.
+        let scale = min(
+            targetRect.width / sourceSize.width,
+            targetRect.height / sourceSize.height
+        )
+        let drawSize = NSSize(
+            width: sourceSize.width * scale,
+            height: sourceSize.height * scale
+        )
+        let drawRect = NSRect(
+            x: targetRect.midX - drawSize.width / 2,
+            y: targetRect.midY - drawSize.height / 2,
+            width: drawSize.width,
+            height: drawSize.height
+        )
+        symbol.draw(
+            in: drawRect,
+            from: .zero,
+            operation: .sourceOver,
+            fraction: 1
         )
     }
 

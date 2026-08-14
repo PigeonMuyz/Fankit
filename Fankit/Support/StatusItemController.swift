@@ -233,18 +233,16 @@ final class StatusItemLabelView: NSView {
     override func layout() {
         super.layout()
         let hasIcon = !imageView.isHidden
-        let textX = hasIcon && displayLayout != .iconOnly
-            ? MenuBarStatusMetrics.iconSize + MenuBarStatusMetrics.iconTextSpacing
-            : 0
-        let iconX = displayLayout == .iconOnly
-            ? floor((bounds.width - MenuBarStatusMetrics.iconSize) / 2)
-            : 0
-        imageView.frame = NSRect(
-            x: iconX,
-            y: floor((bounds.height - MenuBarStatusMetrics.iconSize) / 2),
-            width: hasIcon ? MenuBarStatusMetrics.iconSize : 0,
-            height: MenuBarStatusMetrics.iconSize
+        let textX = MenuBarStatusMetrics.textOriginX(
+            hasIcon: hasIcon,
+            layout: displayLayout
         )
+        imageView.frame = hasIcon
+            ? MenuBarStatusMetrics.iconFrame(
+                in: bounds.size,
+                layout: displayLayout
+            )
+            : .zero
 
         switch displayLayout {
         case .twoLine:
@@ -279,7 +277,7 @@ final class StatusItemLabelView: NSView {
         accessibilitySummary = presentation.accessibilitySummary
 
         if let symbol = presentation.symbolName {
-            imageView.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            imageView.image = MenuBarStatusImageRenderer.configuredSymbol(named: symbol)
             imageView.contentTintColor = .labelColor
             imageView.isHidden = false
         } else {
