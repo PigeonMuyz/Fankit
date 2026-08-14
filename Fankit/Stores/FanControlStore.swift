@@ -6,6 +6,7 @@ import Observation
 @Observable
 final class FanControlStore {
     private static let liveTelemetrySampleLimit = 20
+    private static let curveTargetWriteThresholdRPM = 1.0
 
     private(set) var fans: [FanSnapshot] = []
     private(set) var temperatures: [ThermalSensor] = []
@@ -50,6 +51,8 @@ final class FanControlStore {
     @ObservationIgnored private var isEvaluatingCurve = false
     @ObservationIgnored private var filteredControlTemperature: Double?
     @ObservationIgnored private var previousCurveTargets: [Int: Double] = [:]
+    @ObservationIgnored private var lastAppliedCurveTargets: [Int: Double] = [:]
+    @ObservationIgnored private var isEmergencyMaximumApplied = false
     @ObservationIgnored private var lastCaptureSampleAt: Date?
     @ObservationIgnored private var isAppendingCaptureSample = false
     @ObservationIgnored private var lastLiveTelemetrySampleAt: Date?
@@ -424,8 +427,15 @@ final class FanControlStore {
     }
 
     func refreshHelperStatus() async {
+        let wasReady = helperStatus == .ready
         helperStatus = await fanControl.refreshStatus()
         if helperStatus == .ready {
+            if !wasReady, isCurveMode {
+                // A helper can restart independently of the UI process. Its
+                // manual SMC state is then unknown, so the next curve pass must
+                // reassert the target instead of trusting the old cache.
+                resetCurveRuntimeState()
+            }
             controlMessage = nil
             await restoreStartupModeIfNeeded()
         }
@@ -1083,7 +1093,10 @@ final class FanControlStore {
 
         do {
             if rawTemperature >= 100 {
-                try await fanControl.apply(.maximum)
+                if !isEmergencyMaximumApplied {
+                    try await fanControl.apply(.maximum)
+                    isEmergencyMaximumApplied = true
+                }
                 isCurveOverrideActive = true
                 curveTargetRPMs = Dictionary(uniqueKeysWithValues: fans.map { fan in
                     (
@@ -1094,9 +1107,12 @@ final class FanControlStore {
                     )
                 })
                 previousCurveTargets = curveTargetRPMs
+                lastAppliedCurveTargets = curveTargetRPMs
                 curveStatus = L10n.string("Emergency cooling at maximum speed")
                 return
             }
+
+            isEmergencyMaximumApplied = false
 
             let activation = activeScheduleCurve.activationTemperature
             if isCurveOverrideActive && temperature <= activation - 2 {
@@ -1125,6 +1141,13 @@ final class FanControlStore {
                 return
             }
 
+            let maximumCurveTemperatures = Dictionary(uniqueKeysWithValues: fans.map { fan in
+                (
+                    fan.index,
+                    activeScheduleCurve.normalizedPoints(for: fan.index).last?.temperature ?? 100
+                )
+            })
+
             var nextTargets: [Int: Double] = [:]
             for fan in fans {
                 let fraction = fractions[fan.index]
@@ -1132,23 +1155,36 @@ final class FanControlStore {
                     for: fraction ?? 0,
                     maximumRPM: fan.maximumRPM
                 )
-                if requested == 0 {
-                    try await fanControl.setTargetRPM(0, fan: fan.index)
-                    nextTargets[fan.index] = 0
-                    continue
-                }
-                let previous = previousCurveTargets[fan.index] ?? max(fan.currentRPM, requested)
-                let limited: Double
-                if requested >= previous {
-                    limited = min(requested, previous + 900)
-                } else {
-                    limited = max(requested, previous - 350)
-                }
                 let maximumTarget = ThermalCurveProfile.maximumTargetRPM(
                     maximumRPM: fan.maximumRPM
                 )
-                let target = min(max(limited, 0), maximumTarget)
-                try await fanControl.setTargetRPM(target, fan: fan.index)
+                let target: Double
+                if temperature >= (maximumCurveTemperatures[fan.index] ?? 100) {
+                    // Once a fan reaches the high-temperature end of its curve,
+                    // hold its safe maximum instead of interpolating through
+                    // tiny temperature changes and repeatedly writing SMC.
+                    target = maximumTarget
+                } else if requested == 0 {
+                    if shouldWriteCurveTarget(0, fanIndex: fan.index) {
+                        try await fanControl.setTargetRPM(0, fan: fan.index)
+                        lastAppliedCurveTargets[fan.index] = 0
+                    }
+                    nextTargets[fan.index] = 0
+                    continue
+                } else {
+                    let previous = previousCurveTargets[fan.index] ?? max(fan.currentRPM, requested)
+                    let limited: Double
+                    if requested >= previous {
+                        limited = min(requested, previous + 900)
+                    } else {
+                        limited = max(requested, previous - 350)
+                    }
+                    target = min(max(limited, 0), maximumTarget)
+                }
+                if shouldWriteCurveTarget(target, fanIndex: fan.index) {
+                    try await fanControl.setTargetRPM(target, fan: fan.index)
+                    lastAppliedCurveTargets[fan.index] = target
+                }
                 nextTargets[fan.index] = target
             }
             previousCurveTargets = nextTargets
@@ -1156,13 +1192,21 @@ final class FanControlStore {
             isCurveOverrideActive = true
             let percentageValues = fans.compactMap { fan -> Int? in
                 guard let fraction = fractions[fan.index] else { return 0 }
+                if temperature >= (maximumCurveTemperatures[fan.index] ?? 100) {
+                    return 100
+                }
                 return Int((fraction * 100).rounded())
             }
             if Set(percentageValues).count <= 1, let percentage = percentageValues.first {
                 curveStatus = L10n.format("%d%% fan demand", percentage)
             } else {
                 let values = fans.map { fan in
-                    let percentage = Int(((fractions[fan.index] ?? 0) * 100).rounded())
+                    let percentage: Int
+                    if temperature >= (maximumCurveTemperatures[fan.index] ?? 100) {
+                        percentage = 100
+                    } else {
+                        percentage = Int(((fractions[fan.index] ?? 0) * 100).rounded())
+                    }
                     return "\(fan.name) \(percentage)%"
                 }.joined(separator: " · ")
                 curveStatus = L10n.format("Independent fan control · %@", values)
@@ -1181,6 +1225,11 @@ final class FanControlStore {
             "Auto Boost stopped and restored System mode: %@",
             message
         )
+    }
+
+    private func shouldWriteCurveTarget(_ target: Double, fanIndex: Int) -> Bool {
+        guard let lastApplied = lastAppliedCurveTargets[fanIndex] else { return true }
+        return abs(target - lastApplied) >= Self.curveTargetWriteThresholdRPM
     }
 
     @discardableResult
@@ -1236,6 +1285,8 @@ final class FanControlStore {
     private func resetCurveRuntimeState(keepTemperature: Bool = false) {
         isCurveOverrideActive = false
         previousCurveTargets = [:]
+        lastAppliedCurveTargets = [:]
+        isEmergencyMaximumApplied = false
         curveTargetRPMs = [:]
         if !keepTemperature {
             filteredControlTemperature = nil

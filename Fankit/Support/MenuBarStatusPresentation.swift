@@ -14,7 +14,7 @@ enum MenuBarStatusMetrics {
     static let lineHeight: CGFloat = 11
 }
 
-struct MenuBarStatusPresentation {
+struct MenuBarStatusPresentation: Equatable {
     let symbolName: String?
     let firstLine: String?
     let secondLine: String?

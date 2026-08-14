@@ -10,6 +10,7 @@ final class StatusItemController: NSObject {
     private let popover = NSPopover()
     private var observers: [NSObjectProtocol] = []
     private var currentLanguageRaw = ""
+    private var lastPresentation: MenuBarStatusPresentation?
 
     init(store: FanControlStore, openMainWindow: @escaping () -> Void) {
         self.store = store
@@ -110,9 +111,21 @@ final class StatusItemController: NSObject {
             ) ?? .thermometer,
             customSymbol: defaults.string(forKey: "menuBarCustomSymbol") ?? "thermometer.medium"
         )
+
+        // The menu-bar button is replicated and rasterized by AppKit. Reapplying
+        // the same strings every monitoring tick invalidates that snapshot and
+        // can keep the main thread busy even when the displayed values did not
+        // change.
+        guard presentation != lastPresentation else { return }
+        lastPresentation = presentation
         labelView.configure(presentation)
-        statusItem.length = labelView.preferredWidth + 4
-        statusItem.button?.toolTip = labelView.accessibilitySummary
+        let preferredLength = labelView.preferredWidth + 4
+        if statusItem.length != preferredLength {
+            statusItem.length = preferredLength
+        }
+        if statusItem.button?.toolTip != labelView.accessibilitySummary {
+            statusItem.button?.toolTip = labelView.accessibilitySummary
+        }
     }
 
     private func updatePopoverContentSize(_ size: CGSize) {
