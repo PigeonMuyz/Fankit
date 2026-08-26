@@ -55,12 +55,19 @@ enum ApplicationPreferences {
     }
 
     @MainActor
-    static func applyDockPreference(activate: Bool = false) {
+    @discardableResult
+    static func applyDockPreference(activate: Bool = false) -> Bool {
         let hideDockIcon = UserDefaults.standard.bool(forKey: PreferenceKey.hideDockIcon)
-        NSApp.setActivationPolicy(hideDockIcon ? .accessory : .regular)
+        let desiredPolicy: NSApplication.ActivationPolicy = hideDockIcon ? .accessory : .regular
+        let policyApplied = NSApp.activationPolicy() == desiredPolicy
+            || NSApp.setActivationPolicy(desiredPolicy)
+        guard policyApplied, NSApp.activationPolicy() == desiredPolicy else {
+            return false
+        }
         if activate {
             NSApp.activate(ignoringOtherApps: true)
         }
+        return true
     }
 }
 
