@@ -9,11 +9,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dockPreferenceTask: Task<Void, Never>?
     private var store: FanControlStore?
     private var didFinishLaunching = false
-    private var openMainWindowHandler: (() -> Void)?
-    private var shouldOpenMainWindowWhenReady = false
+    let mainWindow = MainWindowCoordinator()
 
-    func prepare(store: FanControlStore) {
+    func prepare(store: FanControlStore, updateService: GitHubUpdateService) {
         self.store = store
+        mainWindow.makeContent = {
+            NSHostingController(rootView: MainWindowContent(store: store, updateService: updateService))
+        }
         installServicesIfNeeded()
     }
 
@@ -49,11 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
-    func setOpenMainWindowHandler(_ handler: @escaping () -> Void) {
-        openMainWindowHandler = handler
-        guard shouldOpenMainWindowWhenReady else { return }
-        shouldOpenMainWindowWhenReady = false
-        handler()
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        mainWindow.show()
+        return false
     }
 
     deinit {
@@ -75,19 +75,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItemController = StatusItemController(
             store: store,
             openMainWindow: { [weak self] in
-                self?.requestOpenMainWindow()
+                self?.mainWindow.show()
             }
         )
         store.start()
         scheduleDockPreferenceUpdate()
-    }
-
-    private func requestOpenMainWindow() {
-        guard let openMainWindowHandler else {
-            shouldOpenMainWindowWhenReady = true
-            return
-        }
-        openMainWindowHandler()
     }
 
     private func scheduleDockPreferenceUpdate(activate: Bool = false) {
@@ -130,8 +122,9 @@ struct FanControlApp: App {
         ApplicationPreferences.prepareDefaults()
         let store = FanControlStore()
         _store = State(initialValue: store)
-        _updateService = State(initialValue: GitHubUpdateService())
-        appDelegate.prepare(store: store)
+        let updateService = GitHubUpdateService()
+        _updateService = State(initialValue: updateService)
+        appDelegate.prepare(store: store, updateService: updateService)
     }
 
     private var language: AppLanguage {
@@ -140,11 +133,9 @@ struct FanControlApp: App {
 
     var body: some Scene {
         Window("Fankit", id: "main") {
-            ContentView(store: store, updateService: updateService)
-                .frame(minWidth: 720, minHeight: 560)
-                .environment(\.locale, language.locale)
+            MainWindowContent(store: store, updateService: updateService)
                 .background {
-                    StatusItemBootstrapView(appDelegate: appDelegate)
+                    MainWindowRegistration(coordinator: appDelegate.mainWindow)
                 }
         }
         .defaultSize(width: 820, height: 640)
@@ -156,17 +147,40 @@ struct FanControlApp: App {
     }
 }
 
-private struct StatusItemBootstrapView: View {
-    let appDelegate: AppDelegate
-    @Environment(\.openWindow) private var openWindow
+private struct MainWindowContent: View {
+    let store: FanControlStore
+    let updateService: GitHubUpdateService
+    @AppStorage(PreferenceKey.appLanguage) private var languageRaw = AppLanguage.system.rawValue
 
     var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .task {
-                appDelegate.setOpenMainWindowHandler {
-                    openWindow(id: "main")
-                }
-            }
+        ContentView(store: store, updateService: updateService)
+            .frame(minWidth: 720, minHeight: 560)
+            .environment(\.locale, (AppLanguage(rawValue: languageRaw) ?? .system).locale)
+    }
+}
+
+private struct MainWindowRegistration: NSViewRepresentable {
+    let coordinator: MainWindowCoordinator
+
+    func makeNSView(context: Context) -> RegistrationView {
+        RegistrationView(coordinator: coordinator)
+    }
+
+    func updateNSView(_ nsView: RegistrationView, context: Context) {}
+
+    final class RegistrationView: NSView {
+        let coordinator: MainWindowCoordinator
+
+        init(coordinator: MainWindowCoordinator) {
+            self.coordinator = coordinator
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let window { coordinator.register(window) }
+        }
     }
 }

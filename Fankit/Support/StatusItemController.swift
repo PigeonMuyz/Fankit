@@ -152,32 +152,7 @@ final class StatusItemController: NSObject {
 
     private func showMainWindow() {
         popover.performClose(nil)
-        NSApp.activate(ignoringOtherApps: true)
-
-        if let window = existingMainWindow() {
-            window.makeKeyAndOrderFront(nil)
-            window.orderFrontRegardless()
-            return
-        }
-
         openMainWindow()
-        Task { @MainActor [weak self] in
-            self?.existingMainWindow()?.makeKeyAndOrderFront(nil)
-        }
-    }
-
-    private func existingMainWindow() -> NSWindow? {
-        let popoverWindow = popover.contentViewController?.view.window
-        return NSApp.windows.first { window in
-            // A SwiftUI `Window` remains registered with NSApp after the user
-            // closes it, but is no longer visible. Reuse that window directly;
-            // calling openWindow for an already-existing hidden scene is a no-op.
-            guard window !== popoverWindow else { return false }
-            if let identifier = window.identifier?.rawValue {
-                return identifier == "main" || identifier.hasPrefix("main-")
-            }
-            return window.canBecomeMain
-        }
     }
 
     private func showSettings() {

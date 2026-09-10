@@ -69,11 +69,13 @@ struct ContentView: View {
                     }
                 }
         }
-        .onChange(of: store.aiWorkflowRequestID) { _, _ in
-            selection = .aiScheduling
-        }
-        .onChange(of: store.settingsWorkflowRequestID) { _, _ in
-            selection = .settings
+        .onChange(of: store.pendingMainWindowDestination, initial: true) { _, destination in
+            guard let destination else { return }
+            switch destination {
+            case .aiScheduling: selection = .aiScheduling
+            case .settings: selection = .settings
+            }
+            store.pendingMainWindowDestination = nil
         }
         .task {
             await updateService.checkForUpdatesAtLaunch()

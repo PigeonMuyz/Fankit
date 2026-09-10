@@ -39,8 +39,13 @@ final class FanControlStore {
     private(set) var quietCalibrationFanFraction = 0.25
     private(set) var quietCalibrationDraftRPMs: [Int: Double] = [:]
     private(set) var quietCalibrationMessage: String?
-    var aiWorkflowRequestID = 0
-    var settingsWorkflowRequestID = 0
+    // Keep navigation requests until a main-window view can consume them.
+    var pendingMainWindowDestination: MainWindowDestination?
+
+    enum MainWindowDestination {
+        case settings
+        case aiScheduling
+    }
     var selectedMode: FanControlMode = .system
 
     @ObservationIgnored private var monitor: HardwareMonitor?
@@ -416,11 +421,11 @@ final class FanControlStore {
     }
 
     func requestAIWorkflow() {
-        aiWorkflowRequestID &+= 1
+        pendingMainWindowDestination = .aiScheduling
     }
 
     func requestSettings() {
-        settingsWorkflowRequestID &+= 1
+        pendingMainWindowDestination = .settings
     }
 
     func refreshHelperStatus() async {
