@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class StatusItemController: NSObject {
+final class StatusItemController: NSObject, NSPopoverDelegate {
     private let store: FanControlStore
     private let openMainWindow: () -> Void
     private let statusItem: NSStatusItem
@@ -18,7 +18,7 @@ final class StatusItemController: NSObject {
         super.init()
 
         configureButton()
-        configurePopover()
+        popover.delegate = self
         observeChanges()
         refreshLabel()
     }
@@ -75,7 +75,7 @@ final class StatusItemController: NSObject {
                 self.refreshLabel()
                 let languageRaw = UserDefaults.standard.string(forKey: PreferenceKey.appLanguage)
                     ?? AppLanguage.system.rawValue
-                if languageRaw != self.currentLanguageRaw {
+                if self.popover.isShown && languageRaw != self.currentLanguageRaw {
                     self.configurePopover()
                 }
             }
@@ -145,9 +145,15 @@ final class StatusItemController: NSObject {
         if popover.isShown {
             popover.performClose(nil)
         } else {
+            configurePopover()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        // Hidden hosting views otherwise keep observing every telemetry refresh.
+        popover.contentViewController = nil
     }
 
     private func showMainWindow() {

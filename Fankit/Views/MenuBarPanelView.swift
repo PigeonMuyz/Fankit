@@ -1,4 +1,3 @@
-import Charts
 import SwiftUI
 
 struct MenuBarPanelView: View {
@@ -309,26 +308,9 @@ private struct MenuBarLiveTelemetryChart: View {
                 title: "Temperature",
                 value: latestSample.map { "\(Int($0.temperature.rounded()))°C" } ?? "--°C"
             ) {
-                Chart {
-                    ForEach(samples) { sample in
-                        LineMark(
-                            x: .value("Time", sample.timestamp),
-                            y: .value("Temperature", sample.temperature)
-                        )
-                        .foregroundStyle(.orange)
-                        .lineStyle(.init(lineWidth: 1.5))
-
-                        if sample.id == latestSample?.id {
-                            PointMark(
-                                x: .value("Time", sample.timestamp),
-                                y: .value("Temperature", sample.temperature)
-                            )
-                            .foregroundStyle(.orange)
-                            .symbolSize(28)
-                        }
-                    }
-                }
-                .chartYScale(domain: temperatureDomain)
+                TelemetryPlot(series: [
+                    .init(points: samples.map { .init(time: $0.timestamp.timeIntervalSince1970, value: $0.temperature) }, color: .orange)
+                ], domain: temperatureDomain)
             }
 
             fanTelemetryCard
@@ -358,14 +340,8 @@ private struct MenuBarLiveTelemetryChart: View {
             }
 
             content()
-                .chartXAxis(.hidden)
-                .chartYAxis(.hidden)
-                .chartLegend(.hidden)
                 .frame(height: 84)
-                .chartPlotStyle { plot in
-                    plot
-                        .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 6))
-                }
+                .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 6))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -384,37 +360,14 @@ private struct MenuBarLiveTelemetryChart: View {
                     .lineLimit(1)
             }
 
-            Chart {
-                ForEach(samples) { sample in
-                    ForEach(sample.fans) { fan in
-                        LineMark(
-                            x: .value("Time", sample.timestamp),
-                            y: .value("Fan Speed (RPM)", fan.currentRPM),
-                            series: .value("Fan", fan.name)
-                        )
-                        .foregroundStyle(color(for: fan.index))
-                        .lineStyle(.init(lineWidth: 1.5))
-
-                        if sample.id == latestSample?.id {
-                            PointMark(
-                                x: .value("Time", sample.timestamp),
-                                y: .value("Fan Speed (RPM)", fan.currentRPM)
-                            )
-                            .foregroundStyle(color(for: fan.index))
-                            .symbolSize(24)
-                        }
-                    }
-                }
-            }
-            .chartYScale(domain: fanDomain)
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            .chartLegend(.hidden)
+            TelemetryPlot(series: latestFans.map { fan in
+                .init(points: samples.compactMap { sample in
+                    guard let reading = sample.fans.first(where: { $0.index == fan.index }) else { return nil }
+                    return .init(time: sample.timestamp.timeIntervalSince1970, value: reading.currentRPM)
+                }, color: color(for: fan.index))
+            }, domain: fanDomain)
             .frame(height: 72)
-            .chartPlotStyle { plot in
-                plot
-                    .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 6))
-            }
+            .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 6))
 
             HStack(spacing: 6) {
                 ForEach(latestFans) { fan in
