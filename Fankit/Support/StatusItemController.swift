@@ -61,7 +61,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         ).environment(\.locale, language.locale))
         hostingController.view.wantsLayer = true
         popover.contentViewController = hostingController
-        updatePopoverContentSize(for: store.selectedMode)
+        updatePopoverContentSize(hostingController.view.fittingSize)
     }
 
     private func observeChanges() {
@@ -122,22 +122,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     }
 
     private func updatePopoverContentSize(_ size: CGSize) {
-        let contentSize = NSSize(width: size.width, height: size.height)
+        guard size.width > 0, size.height > 0 else { return }
+        let contentSize = NSSize(width: ceil(size.width), height: ceil(size.height))
         guard popover.contentSize != contentSize else { return }
         popover.contentSize = contentSize
-    }
-
-    private func updatePopoverContentSize(for mode: FanControlMode) {
-        let height: CGFloat
-        switch mode {
-        case .autoBoost:
-            height = 410
-        case .aiScheduling:
-            height = 440
-        default:
-            height = 350
-        }
-        updatePopoverContentSize(NSSize(width: 380, height: height))
     }
 
     @objc private func togglePopover() {

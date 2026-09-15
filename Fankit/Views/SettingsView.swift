@@ -391,6 +391,30 @@ private struct UpdateSettingsView: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(updateService.isDownloading)
                     }
+                    if updateService.isDownloading {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(verbatim: L10n.string(updateService.updateStage))
+                                Spacer()
+                                if updateService.isTransferring, let fraction = updateService.downloadFraction {
+                                    Text(fraction, format: .percent.precision(.fractionLength(0)))
+                                        .monospacedDigit()
+                                }
+                            }
+                            if updateService.isTransferring, let fraction = updateService.downloadFraction {
+                                ProgressView(value: fraction)
+                            } else {
+                                ProgressView().controlSize(.small)
+                            }
+                            if updateService.isTransferring {
+                                Text(verbatim: updateService.downloadSizeText)
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
+                        }
+                        .font(.caption)
+                        .accessibilityElement(children: .combine)
+                    }
                 }
 
                 if let errorMessage = updateService.errorMessage,

@@ -9,17 +9,26 @@ struct MenuBarPanelView: View {
     var openAIWorkflow: () -> Void = {}
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 Label("Fankit", systemImage: "fan")
                     .font(.headline)
                 Spacer()
-                Text(verbatim: selectedSchedule.title)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.quaternary, in: Capsule())
+                Button("Settings", systemImage: "gearshape", action: showSettings)
+                    .labelStyle(.iconOnly)
+                    .help(Text("Settings"))
+                    .buttonStyle(.borderless)
+                    .frame(width: 24, height: 24)
+                Menu {
+                    Button("Quit", systemImage: "power", action: quit)
+                } label: {
+                    Label("More Actions", systemImage: "ellipsis")
+                }
+                .labelStyle(.iconOnly)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .frame(width: 24, height: 24)
+                .help(Text("More Actions"))
             }
 
             HStack(spacing: 8) {
@@ -50,44 +59,27 @@ struct MenuBarPanelView: View {
                 helperNotice
             }
 
-            Spacer(minLength: 0)
             Divider()
 
             HStack(spacing: 8) {
                 Button("Show Main Window", systemImage: "macwindow", action: showMainWindow)
                 Spacer()
-                Button("Settings", systemImage: "gearshape", action: showSettings)
-                Button("Quit", systemImage: "power", action: quit)
+                Button("AI Scheduling", systemImage: "sparkles", action: openAIWorkflow)
             }
             .buttonStyle(.borderless)
         }
-        .padding(16)
-        .frame(width: 380, height: preferredHeight)
-        .onAppear {
-            reportPreferredSize()
-        }
-        .onChange(of: selectedSchedule) { _, _ in
-            reportPreferredSize()
-        }
-    }
-
-    private var preferredHeight: CGFloat {
-        switch selectedSchedule {
-        case .customScheduling:
-            410
-        case .aiScheduling:
-            440
-        case .systemScheduling, .extremeCooling:
-            350
+        .padding(12)
+        .frame(width: 380)
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGSize.self) { geometry in
+            geometry.size
+        } action: { size in
+            onPreferredSizeChange(size)
         }
     }
 
     private var selectedSchedule: MenuBarSchedule {
         MenuBarSchedule(mode: store.selectedMode)
-    }
-
-    private func reportPreferredSize() {
-        onPreferredSizeChange(CGSize(width: 380, height: preferredHeight))
     }
 
     @ViewBuilder
@@ -140,7 +132,6 @@ struct MenuBarPanelView: View {
                 .foregroundStyle(.secondary)
 
             MenuBarLiveTelemetryChart(samples: store.liveTelemetry)
-            .frame(height: 132)
         }
     }
 
@@ -165,7 +156,6 @@ struct MenuBarPanelView: View {
             }
 
             MenuBarLiveTelemetryChart(samples: store.liveTelemetry)
-            .frame(height: 132)
         }
     }
 
@@ -260,6 +250,7 @@ private struct MenuBarScheduleMenu: View {
             .background(.quaternary.opacity(0.65), in: RoundedRectangle(cornerRadius: 8))
         }
         .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
         .buttonStyle(.plain)
         .help(L10n.string("Choose a scheduling mode"))
     }
@@ -342,6 +333,9 @@ private struct MenuBarLiveTelemetryChart: View {
             content()
                 .frame(height: 84)
                 .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 6))
+
+            // Match the fan legend row so both plots share the same baseline.
+            Color.clear.frame(height: 14)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -366,7 +360,7 @@ private struct MenuBarLiveTelemetryChart: View {
                     return .init(time: sample.timestamp.timeIntervalSince1970, value: reading.currentRPM)
                 }, color: color(for: fan.index))
             }, domain: fanDomain)
-            .frame(height: 72)
+            .frame(height: 84)
             .background(.quaternary.opacity(0.32), in: RoundedRectangle(cornerRadius: 6))
 
             HStack(spacing: 6) {
@@ -384,6 +378,7 @@ private struct MenuBarLiveTelemetryChart: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 14)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

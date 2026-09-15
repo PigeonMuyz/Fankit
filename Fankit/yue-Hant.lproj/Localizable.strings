@@ -424,3 +424,9 @@
 "This fan now follows the shared curve." = "呢把風扇而家使用共用曲線。";
 "This preset controls each fan independently." = "呢個預設會獨立控制每把風扇。";
 "Time (min)" = "時間（分鐘）";
+"Preparing download…" = "準備下載中…";
+"Downloading update…" = "下載更新中…";
+"Verifying update…" = "驗證更新中…";
+"Installing update…" = "安裝更新中…";
+"Restarting Fankit…" = "重新啟動 Fankit 中…";
+"More Actions" = "更多操作";

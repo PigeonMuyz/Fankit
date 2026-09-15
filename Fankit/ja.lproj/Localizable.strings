@@ -424,3 +424,9 @@
 "This fan now follows the shared curve." = "このファンは共通カーブを使用するようになりました。";
 "This preset controls each fan independently." = "このプリセットは各ファンを独立して制御します。";
 "Time (min)" = "時間（分）";
+"Preparing download…" = "ダウンロードを準備中…";
+"Downloading update…" = "アップデートをダウンロード中…";
+"Verifying update…" = "アップデートを検証中…";
+"Installing update…" = "アップデートをインストール中…";
+"Restarting Fankit…" = "Fankit を再起動中…";
+"More Actions" = "その他の操作";

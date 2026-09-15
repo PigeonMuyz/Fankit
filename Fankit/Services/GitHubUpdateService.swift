@@ -53,10 +53,26 @@ final class GitHubUpdateService {
     private(set) var latestRelease: GitHubRelease?
     private(set) var isChecking = false
     private(set) var isDownloading = false
+    private(set) var updateStage = "Preparing download…"
+    private(set) var downloadedBytes: Int64 = 0
+    private(set) var downloadTotalBytes: Int64 = 0
+    private(set) var isTransferring = false
+
+    var downloadFraction: Double? {
+        guard downloadTotalBytes > 0 else { return nil }
+        return min(max(Double(downloadedBytes) / Double(downloadTotalBytes), 0), 1)
+    }
+
+    var downloadSizeText: String {
+        let received = ByteCountFormatter.string(fromByteCount: downloadedBytes, countStyle: .file)
+        guard downloadTotalBytes > 0 else { return received }
+        return received + " / " + ByteCountFormatter.string(fromByteCount: downloadTotalBytes, countStyle: .file)
+    }
     private(set) var errorMessage: String?
     private(set) var lastCheckedAt: Date?
 
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private var downloadAttemptID = UUID()
     @ObservationIgnored private let fanControl = FanControlService()
     @ObservationIgnored private let releasesEndpoint = URL(
         string: "https://api.github.com/repos/PigeonMuyz/Fankit/releases/latest"
@@ -159,12 +175,35 @@ final class GitHubUpdateService {
             return
         }
         isDownloading = true
+        let attemptID = UUID()
+        downloadAttemptID = attemptID
+        updateStage = "Preparing download…"
+        downloadedBytes = 0
+        downloadTotalBytes = 0
         errorMessage = nil
-        defer { isDownloading = false }
+        defer {
+            isDownloading = false
+            isTransferring = false
+        }
 
         do {
             let expectedChecksum = try await expectedChecksum(for: diskImage, release: release)
-            let (temporaryURL, response) = try await URLSession.shared.download(from: diskImage.browserDownloadURL)
+            updateStage = "Downloading update…"
+            isTransferring = true
+            let (temporaryURL, response) = try await UpdateDownloadDelegate.download(from: diskImage.browserDownloadURL) { [weak self] received, total in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isTransferring, self.downloadAttemptID == attemptID else { return }
+                    // Publish only meaningful changes, not every network packet.
+                    guard received >= self.downloadedBytes,
+                          received - self.downloadedBytes >= 65_536 || received == total || self.downloadedBytes == 0
+                    else { return }
+                    self.downloadedBytes = received
+                    self.downloadTotalBytes = total
+                }
+            }
+            defer { try? FileManager.default.removeItem(at: temporaryURL) }
+            isTransferring = false
+            updateStage = "Verifying update…"
             try Self.validate(response)
             let actualChecksum = try Self.sha256(of: temporaryURL)
             guard actualChecksum.caseInsensitiveCompare(expectedChecksum) == .orderedSame else {
@@ -187,6 +226,7 @@ final class GitHubUpdateService {
             let releaseVersion = release.version
             let installedVersion = currentVersion
             let installedAppURL = Bundle.main.bundleURL
+            updateStage = "Installing update…"
             var installationResult: AppUpdateInstallationResult?
             let helperSupportsInPlaceUpdates = Self.compareVersions(
                 installedVersion,
@@ -246,6 +286,7 @@ final class GitHubUpdateService {
             }
 
             let configuration = NSWorkspace.OpenConfiguration()
+            updateStage = "Restarting Fankit…"
             configuration.activates = true
             configuration.createsNewApplicationInstance = true
             try await NSWorkspace.shared.openApplication(

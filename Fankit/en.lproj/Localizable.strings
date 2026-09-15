@@ -424,3 +424,9 @@
 "This fan now follows the shared curve." = "This fan now follows the shared curve.";
 "This preset controls each fan independently." = "This preset controls each fan independently.";
 "Time (min)" = "Time (min)";
+"Preparing download…" = "Preparing download…";
+"Downloading update…" = "Downloading update…";
+"Verifying update…" = "Verifying update…";
+"Installing update…" = "Installing update…";
+"Restarting Fankit…" = "Restarting Fankit…";
+"More Actions" = "More Actions";
